@@ -209,7 +209,7 @@ class AudioAsrWorker(QObject):
 
     def _create_stream(self, recognizer):
         stream = recognizer.create_stream()
-        if model_preset(self.config.asr.model_variant).supports_language:
+        if model_preset(self.config.asr.model_variant).accepts_language_option:
             stream.set_option("language", self.config.asr.language or "auto")
         return stream
 

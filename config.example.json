@@ -6,7 +6,7 @@
     "decoder": "decoder.int8.onnx",
     "joiner": "joiner.int8.onnx",
     "tokens": "tokens.txt",
-    "language": "auto",
+    "language": "en",
     "auto_standby_seconds": 0
   },
   "translation": {

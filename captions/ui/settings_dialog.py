@@ -43,6 +43,38 @@ from captions.config import (
 )
 from captions.ui.caption_canvas import CaptionCanvas
 
+ASR_LANGUAGE_LABELS = {
+    "auto": "自动检测",
+    "en": "英语",
+    "es": "西班牙语",
+    "fr": "法语",
+    "it": "意大利语",
+    "pt": "葡萄牙语",
+    "nl": "荷兰语",
+    "de": "德语",
+    "tr": "土耳其语",
+    "ru": "俄语",
+    "ar": "阿拉伯语",
+    "hi": "印地语",
+    "ja": "日语",
+    "ko": "韩语",
+    "vi": "越南语",
+    "uk": "乌克兰语",
+    "pl": "波兰语（实验性）",
+    "sv": "瑞典语（实验性）",
+    "cs": "捷克语（实验性）",
+    "nb": "挪威语（实验性）",
+    "da": "丹麦语（实验性）",
+    "bg": "保加利亚语（实验性）",
+    "fi": "芬兰语（实验性）",
+    "hr": "克罗地亚语（实验性）",
+    "sk": "斯洛伐克语（实验性）",
+    "zh": "普通话（实验性）",
+    "hu": "匈牙利语（实验性）",
+    "ro": "罗马尼亚语（实验性）",
+    "et": "爱沙尼亚语（实验性）",
+}
+
 
 def _forward_wheel_to_page(widget: QWidget, event) -> None:
     parent = widget.parentWidget()
@@ -207,23 +239,12 @@ class SettingsDialog(QDialog):
         form.addRow("模型状态", self.model_status)
         self.model_dir.textChanged.connect(self._refresh_model_path_status)
         self.asr_language = WheelSafeComboBox()
-        for label, code in (
-            ("自动检测", "auto"), ("英语", "en"), ("西班牙语", "es"),
-            ("法语", "fr"), ("意大利语", "it"), ("葡萄牙语", "pt"),
-            ("荷兰语", "nl"), ("德语", "de"), ("土耳其语", "tr"),
-            ("俄语", "ru"), ("阿拉伯语", "ar"), ("印地语", "hi"),
-            ("日语", "ja"), ("韩语", "ko"), ("越南语", "vi"),
-            ("乌克兰语", "uk"), ("普通话（实验性）", "zh"),
-            ("波兰语（实验性）", "pl"), ("瑞典语（实验性）", "sv"),
-            ("捷克语（实验性）", "cs"), ("挪威语（实验性）", "nb"),
-            ("丹麦语（实验性）", "da"), ("保加利亚语（实验性）", "bg"),
-            ("芬兰语（实验性）", "fi"), ("克罗地亚语（实验性）", "hr"),
-            ("斯洛伐克语（实验性）", "sk"), ("匈牙利语（实验性）", "hu"),
-            ("罗马尼亚语（实验性）", "ro"), ("爱沙尼亚语（实验性）", "et"),
-        ):
-            self.asr_language.addItem(label, code)
+        self._populate_asr_languages("english", "en")
         form.addRow("识别语言", self.asr_language)
         self.model_variant.currentIndexChanged.connect(self._model_variant_changed)
+        self.asr_language.currentIndexChanged.connect(
+            self._recognition_language_changed
+        )
         controls_layout.addWidget(model_group)
 
         standby_group = QGroupBox("自动待机")
@@ -574,7 +595,10 @@ class SettingsDialog(QDialog):
         self.config = clone_config(config)
         self._select(self.model_variant, config.asr.model_variant)
         self.model_dir.setText(config.asr.model_dir)
-        self._select(self.asr_language, config.asr.language)
+        self._populate_asr_languages(
+            config.asr.model_variant,
+            config.asr.language,
+        )
         self._select(self.auto_standby, config.asr.auto_standby_seconds)
         self._select(self.source_lang, config.translation.source_lang)
         self._select(self.target_lang, config.translation.target_lang)
@@ -741,18 +765,54 @@ class SettingsDialog(QDialog):
         self._update_style_preview()
 
     def _model_variant_changed(self, *args) -> None:
+        model_variant = self.model_variant.currentData()
+        preset = MODEL_CATALOG[model_variant]
+        self._populate_asr_languages(
+            model_variant,
+            preset.default_language,
+        )
         if not self._loading:
-            self.model_dir.setText(default_model_dir(self.model_variant.currentData()))
-        self._update_model_controls()
+            self.model_dir.setText(default_model_dir(model_variant))
+            self._sync_translation_source_from_recognition()
         self._refresh_model_path_status()
 
     def _update_model_controls(self) -> None:
-        supports_language = MODEL_CATALOG[
-            self.model_variant.currentData()
-        ].supports_language
-        self.asr_language.setEnabled(supports_language)
-        if not supports_language:
-            self._select(self.asr_language, "auto")
+        self.asr_language.setEnabled(self.asr_language.count() > 1)
+
+    def _populate_asr_languages(
+        self,
+        model_variant: str,
+        selected: str,
+    ) -> None:
+        preset = MODEL_CATALOG[model_variant]
+        languages = list(preset.supported_languages)
+        if preset.supports_auto_language:
+            languages.insert(0, "auto")
+        previous = self.asr_language.blockSignals(True)
+        self.asr_language.clear()
+        for code in languages:
+            self.asr_language.addItem(ASR_LANGUAGE_LABELS[code], code)
+        self._select(
+            self.asr_language,
+            selected if selected in languages else preset.default_language,
+        )
+        self.asr_language.blockSignals(previous)
+        self._update_model_controls()
+
+    def _recognition_language_changed(self, *args) -> None:
+        if not self._loading:
+            self._sync_translation_source_from_recognition()
+
+    def _sync_translation_source_from_recognition(self) -> None:
+        if self.source_lang.currentData() == "AUTO":
+            return
+        recognition = self.asr_language.currentData()
+        source = "ZH" if recognition == "zh" else str(recognition).upper()
+        index = self.source_lang.findData(source)
+        if index < 0:
+            index = self.source_lang.findData("AUTO")
+        if index >= 0 and self.source_lang.currentIndex() != index:
+            self.source_lang.setCurrentIndex(index)
 
     def _update_backend_controls(self, *args) -> None:
         self.backend_options.setCurrentIndex(max(0, self.backend.currentIndex()))

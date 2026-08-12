@@ -30,6 +30,38 @@ CHINESE_MODEL_URL = (
     f"{CHINESE_MODEL_NAME}.tar.bz2"
 )
 
+NEMOTRON_MULTILINGUAL_LANGUAGES = (
+    "en",
+    "es",
+    "fr",
+    "it",
+    "pt",
+    "nl",
+    "de",
+    "tr",
+    "ru",
+    "ar",
+    "hi",
+    "ja",
+    "ko",
+    "vi",
+    "uk",
+    "pl",
+    "sv",
+    "cs",
+    "nb",
+    "da",
+    "bg",
+    "fi",
+    "hr",
+    "sk",
+    "zh",
+    "hu",
+    "ro",
+    "et",
+)
+
+
 @dataclass(frozen=True)
 class ModelPreset:
     label: str
@@ -42,7 +74,13 @@ class ModelPreset:
     joiner: str
     tokens: str = "tokens.txt"
     model_type: str = ""
-    supports_language: bool = False
+    supported_languages: tuple[str, ...] = ()
+    supports_auto_language: bool = False
+    default_language: str = "auto"
+
+    @property
+    def accepts_language_option(self) -> bool:
+        return self.supports_auto_language or len(self.supported_languages) > 1
 
 
 MODEL_CATALOG = {
@@ -55,6 +93,8 @@ MODEL_CATALOG = {
         "encoder.int8.onnx",
         "decoder.int8.onnx",
         "joiner.int8.onnx",
+        supported_languages=("en",),
+        default_language="en",
     ),
     "multilingual": ModelPreset(
         "Nemotron 3.5 560 ms（多语言）",
@@ -65,7 +105,9 @@ MODEL_CATALOG = {
         "encoder.int8.onnx",
         "decoder.int8.onnx",
         "joiner.int8.onnx",
-        supports_language=True,
+        supported_languages=NEMOTRON_MULTILINGUAL_LANGUAGES,
+        supports_auto_language=True,
+        default_language="auto",
     ),
     "chinese": ModelPreset(
         "Zipformer INT8（中文，轻量）",
@@ -77,6 +119,8 @@ MODEL_CATALOG = {
         "decoder.onnx",
         "joiner.int8.onnx",
         model_type="zipformer2",
+        supported_languages=("zh",),
+        default_language="zh",
     ),
 }
 MODEL_PRESETS = {
@@ -106,7 +150,7 @@ class AsrConfig:
     decoder: str = "decoder.int8.onnx"
     joiner: str = "joiner.int8.onnx"
     tokens: str = "tokens.txt"
-    language: str = "auto"
+    language: str = "en"
     auto_standby_seconds: int = 0
 
 
@@ -216,6 +260,12 @@ def _normalize_config(config: AppConfig) -> None:
     defaults = AppConfig()
     if config.asr.model_variant not in MODEL_PRESETS:
         config.asr.model_variant = defaults.asr.model_variant
+    preset = MODEL_CATALOG[config.asr.model_variant]
+    valid_languages = set(preset.supported_languages)
+    if preset.supports_auto_language:
+        valid_languages.add("auto")
+    if config.asr.language not in valid_languages:
+        config.asr.language = preset.default_language
     config.asr.auto_standby_seconds = int(
         _clamp(config.asr.auto_standby_seconds, 0, 3600)
     )
@@ -388,8 +438,7 @@ def apply_model_preset(asr: AsrConfig, model_variant: str) -> None:
     asr.decoder = preset.decoder
     asr.joiner = preset.joiner
     asr.tokens = preset.tokens
-    if not preset.supports_language:
-        asr.language = "auto"
+    asr.language = preset.default_language
 
 
 def default_model_dir(model_variant: str) -> str:

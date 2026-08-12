@@ -26,6 +26,8 @@ from captions.config import (
     AppConfig,
     CHINESE_MODEL_NAME,
     MULTILINGUAL_MODEL_NAME,
+    NEMOTRON_MULTILINGUAL_LANGUAGES,
+    MODEL_CATALOG,
     apply_model_preset,
     default_model_dir,
     load_config,
@@ -575,13 +577,25 @@ class AudioAsrTests(unittest.TestCase):
         config.asr.model_variant = "multilingual"
         config.asr.language = "ja"
         options: list[tuple[str, str]] = []
-        stream = SimpleNamespace(set_option=lambda key, value: options.append((key, value)))
+        stream = SimpleNamespace(
+            set_option=lambda key, value: options.append((key, value))
+        )
         recognizer = SimpleNamespace(create_stream=lambda: stream)
 
         created = AudioAsrWorker(config)._create_stream(recognizer)
 
         self.assertIs(created, stream)
         self.assertEqual(options, [("language", "ja")])
+
+    def test_single_language_stream_does_not_receive_a_language_option(self) -> None:
+        config = AppConfig()
+        options: list[tuple[str, str]] = []
+        stream = SimpleNamespace(set_option=lambda key, value: options.append((key, value)))
+        recognizer = SimpleNamespace(create_stream=lambda: stream)
+
+        AudioAsrWorker(config)._create_stream(recognizer)
+
+        self.assertEqual(options, [])
 
     def test_vad_gate_keeps_preroll_and_marks_the_speech_endpoint(self) -> None:
         class FakeVad:
@@ -759,6 +773,8 @@ class SettingsDialogTests(unittest.TestCase):
             ["识别", "翻译", "外观", "术语表"],
         )
         self.assertEqual(dialog.backend.currentData(), "llama")
+        self.assertEqual(dialog.asr_language.count(), 1)
+        self.assertEqual(dialog.asr_language.currentData(), "en")
         self.assertEqual(dialog.source_lang.itemData(0), "AUTO")
         self.assertEqual(dialog.source_lang.itemText(0), "自动检测")
         self.assertEqual(dialog.source_lang.currentData(), "EN")
@@ -809,8 +825,50 @@ class SettingsDialogTests(unittest.TestCase):
         )
 
         self.assertTrue(dialog.asr_language.isEnabled())
+        self.assertEqual(dialog.asr_language.currentData(), "auto")
+        self.assertEqual(
+            [
+                dialog.asr_language.itemData(index)
+                for index in range(dialog.asr_language.count())
+            ],
+            ["auto", *NEMOTRON_MULTILINGUAL_LANGUAGES],
+        )
         self.assertEqual(dialog.model_dir.text(), default_model_dir("multilingual"))
         self.assertIn(MULTILINGUAL_MODEL_NAME, dialog.model_dir.text())
+        dialog.close()
+
+    def test_recognition_language_only_updates_a_conflicting_source(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        dialog.model_variant.setCurrentIndex(
+            dialog.model_variant.findData("multilingual")
+        )
+        self.assertEqual(dialog.source_lang.currentData(), "AUTO")
+
+        dialog.source_lang.setCurrentIndex(dialog.source_lang.findData("EN"))
+        dialog.asr_language.setCurrentIndex(dialog.asr_language.findData("ja"))
+        self.assertEqual(dialog.source_lang.currentData(), "JA")
+
+        dialog.source_lang.setCurrentIndex(dialog.source_lang.findData("AUTO"))
+        dialog.asr_language.setCurrentIndex(dialog.asr_language.findData("ko"))
+        self.assertEqual(dialog.source_lang.currentData(), "AUTO")
+
+        dialog.source_lang.setCurrentIndex(dialog.source_lang.findData("EN"))
+        dialog.asr_language.setCurrentIndex(dialog.asr_language.findData("tr"))
+        self.assertEqual(dialog.source_lang.currentData(), "AUTO")
+        dialog.close()
+
+    def test_single_language_models_expose_their_actual_language(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        self.assertFalse(dialog.asr_language.isEnabled())
+        self.assertEqual(dialog.asr_language.currentData(), "en")
+
+        dialog.model_variant.setCurrentIndex(
+            dialog.model_variant.findData("chinese")
+        )
+        self.assertFalse(dialog.asr_language.isEnabled())
+        self.assertEqual(dialog.asr_language.count(), 1)
+        self.assertEqual(dialog.asr_language.currentData(), "zh")
+        self.assertEqual(dialog.source_lang.currentData(), "ZH")
         dialog.close()
 
     def test_appearance_controls_round_trip_all_exposed_values(self) -> None:
@@ -1079,6 +1137,7 @@ class ConfigTests(unittest.TestCase):
     def test_new_features_keep_existing_defaults(self) -> None:
         config = AppConfig()
         self.assertEqual(config.asr.model_variant, "english")
+        self.assertEqual(config.asr.language, "en")
         self.assertEqual(config.asr.auto_standby_seconds, 0)
         self.assertEqual(config.translation.backend, "llama")
         self.assertEqual(config.translation.source_lang, "EN")
@@ -1089,7 +1148,7 @@ class ConfigTests(unittest.TestCase):
     def test_example_config_contains_all_new_options(self) -> None:
         loaded, _ = load_config(Path(__file__).resolve().parent.parent / "config.example.json")
         self.assertEqual(loaded.asr.model_variant, "english")
-        self.assertEqual(loaded.asr.language, "auto")
+        self.assertEqual(loaded.asr.language, "en")
         self.assertEqual(loaded.asr.auto_standby_seconds, 0)
         self.assertEqual(loaded.translation.deepl_api_plan, "free")
         self.assertEqual(loaded.translation.source_lang, "EN")
@@ -1107,6 +1166,27 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(loaded.translation.source_lang, "EN")
         self.assertEqual(loaded.translation.target_lang, "JA")
+
+    def test_model_catalog_declares_language_compatibility(self) -> None:
+        self.assertEqual(MODEL_CATALOG["english"].supported_languages, ("en",))
+        self.assertEqual(MODEL_CATALOG["chinese"].supported_languages, ("zh",))
+        self.assertTrue(MODEL_CATALOG["multilingual"].supports_auto_language)
+        self.assertEqual(
+            MODEL_CATALOG["multilingual"].supported_languages,
+            NEMOTRON_MULTILINGUAL_LANGUAGES,
+        )
+
+    def test_model_language_is_normalized_to_its_compatibility_list(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"asr":{"model_variant":"chinese","language":"ja"}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.asr.language, "zh")
 
     def test_model_completeness_requires_all_four_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
