@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from collections import deque
 
 import numpy as np
@@ -19,6 +20,21 @@ from captions.config import (
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
 VAD_WINDOW_SIZE = 512
 VAD_PRE_ROLL_WINDOWS = 16
+CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
+CAPTURE_BUFFER_SIZE = 8960
+
+
+def _record_samples(recorder) -> np.ndarray:
+    # SoundCard keeps the stream running after a WASAPI discontinuity, but it
+    # repeats the same warning for every flagged packet. Keep all other audio
+    # warnings visible while quieting only this known recoverable condition.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"^data discontinuity in recording$",
+            category=sc.SoundcardRuntimeWarning,
+        )
+        return recorder.record(numframes=CAPTURE_BLOCK_SIZE)
 
 
 class AutoStandbyDetector:
@@ -141,12 +157,14 @@ class AudioAsrWorker(QObject):
                 self.status.emit(f"正在识别：{speaker.name}")
                 try:
                     with loopback.recorder(
-                        samplerate=16000, channels=1, blocksize=8960
+                        samplerate=16000,
+                        channels=1,
+                        blocksize=CAPTURE_BUFFER_SIZE,
                     ) as recorder:
                         while not self._stop.is_set():
                             if self._pause.is_set():
                                 break
-                            samples = recorder.record(numframes=8960)
+                            samples = _record_samples(recorder)
                             mono = np.asarray(samples[:, 0], dtype=np.float32)
                             level = float(np.max(np.abs(mono))) if mono.size else 0.0
                             standby_change = self._standby.update(level)
@@ -213,8 +231,7 @@ class AudioAsrWorker(QObject):
             stream.set_option("language", self.config.asr.language or "auto")
         return stream
 
-    @staticmethod
-    def _create_vad():
+    def _create_vad(self):
         try:
             import sherpa_onnx
         except ImportError as error:
@@ -227,7 +244,9 @@ class AudioAsrWorker(QObject):
         config = sherpa_onnx.VadModelConfig()
         config.silero_vad.model = str(model)
         config.silero_vad.threshold = 0.25
-        config.silero_vad.min_silence_duration = 0.5
+        config.silero_vad.min_silence_duration = (
+            self.config.asr.silence_endpoint_ms / 1000
+        )
         config.silero_vad.min_speech_duration = 0.25
         config.silero_vad.max_speech_duration = 20.0
         config.silero_vad.window_size = VAD_WINDOW_SIZE
@@ -256,7 +275,7 @@ class AudioAsrWorker(QObject):
             encoder=str(files["encoder"]),
             decoder=str(files["decoder"]),
             joiner=str(files["joiner"]),
-            num_threads=1,
+            num_threads=self.config.asr.num_threads,
             sample_rate=16000,
             feature_dim=80,
             provider=provider,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
@@ -103,6 +103,11 @@ class WheelSafeSpinBox(QSpinBox):
     def wheelEvent(self, event) -> None:  # noqa: N802
         _forward_wheel_to_page(self, event)
 
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        super().focusInEvent(event)
+        if event.reason() == Qt.FocusReason.MouseFocusReason:
+            QTimer.singleShot(0, self.selectAll)
+
 
 class WheelSafeDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, parent=None) -> None:
@@ -111,6 +116,11 @@ class WheelSafeDoubleSpinBox(QDoubleSpinBox):
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         _forward_wheel_to_page(self, event)
+
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        super().focusInEvent(event)
+        if event.reason() == Qt.FocusReason.MouseFocusReason:
+            QTimer.singleShot(0, self.selectAll)
 
 
 class WheelSafeFontComboBox(QFontComboBox):
@@ -125,18 +135,17 @@ class WheelSafeFontComboBox(QFontComboBox):
 class ExpandableSection(QWidget):
     def __init__(self, title: str, parent=None) -> None:
         super().__init__(parent)
+        self._expanded = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         self.toggle = QToolButton()
         self.toggle.setText(title)
-        self.toggle.setCheckable(True)
-        self.toggle.setChecked(False)
         self.toggle.setArrowType(Qt.ArrowType.RightArrow)
         self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setAutoRaise(True)
         self.toggle.setStyleSheet("font-weight:600;padding:4px 0")
-        self.toggle.toggled.connect(self._set_expanded)
+        self.toggle.clicked.connect(self._toggle_expanded)
         layout.addWidget(self.toggle)
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
@@ -148,7 +157,11 @@ class ExpandableSection(QWidget):
     def addWidget(self, widget: QWidget) -> None:  # noqa: N802
         self.body_layout.addWidget(widget)
 
+    def _toggle_expanded(self) -> None:
+        self._set_expanded(not self._expanded)
+
     def _set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
         self.toggle.setArrowType(
             Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
         )
@@ -268,6 +281,25 @@ class SettingsDialog(QDialog):
         model_files_form = QFormLayout(model_files_group)
         model_files_form.addRow("模型目录", row)
         advanced.addWidget(model_files_group)
+
+        performance_group = QGroupBox("性能与响应")
+        performance_form = QFormLayout(performance_group)
+        self.asr_threads = WheelSafeComboBox()
+        for label, threads in (
+            ("1", 1),
+            ("2", 2),
+            ("4", 4),
+            ("8", 8),
+        ):
+            self.asr_threads.addItem(label, threads)
+        performance_form.addRow("识别线程数", self.asr_threads)
+        self.silence_endpoint = WheelSafeDoubleSpinBox()
+        self.silence_endpoint.setRange(0.3, 1.5)
+        self.silence_endpoint.setDecimals(1)
+        self.silence_endpoint.setSingleStep(0.1)
+        self.silence_endpoint.setSuffix(" 秒")
+        performance_form.addRow("静音断句等待", self.silence_endpoint)
+        advanced.addWidget(performance_group)
 
         segmentation_group = QGroupBox("分句与实时预览")
         form = QFormLayout(segmentation_group)
@@ -493,17 +525,17 @@ class SettingsDialog(QDialog):
         self.mode.addItem("仅识别文本", "source")
         self.mode.addItem("仅翻译文本", "translation")
         typography_form.addRow("显示内容", self.mode)
-        self.max_rows = WheelSafeSpinBox()
-        self.max_rows.setRange(2, 6)
-        self.max_rows.setSuffix(" 行")
-        typography_form.addRow("最大行数", self.max_rows)
+        self.max_sentences = WheelSafeSpinBox()
+        self.max_sentences.setRange(1, 6)
+        self.max_sentences.setSuffix(" 句")
+        typography_form.addRow("最大句数", self.max_sentences)
         self.font = WheelSafeFontComboBox()
         typography_form.addRow("字体", self.font)
         self.source_size = WheelSafeSpinBox()
         self.translation_size = WheelSafeSpinBox()
         for control in (self.source_size, self.translation_size):
             control.setRange(14, 72)
-            control.setSuffix(" pt")
+            control.setSuffix(" px")
         typography_form.addRow("识别文字号", self.source_size)
         typography_form.addRow("翻译文字号", self.translation_size)
         self.weight = WheelSafeSpinBox()
@@ -524,8 +556,9 @@ class SettingsDialog(QDialog):
         readability_form.addRow("文字颜色", self.text_color)
         readability_form.addRow("描边颜色", self.outline_color)
         self.outline_width = WheelSafeDoubleSpinBox()
-        self.outline_width.setRange(0, 8)
-        self.outline_width.setSingleStep(0.5)
+        self.outline_width.setRange(0, 1)
+        self.outline_width.setDecimals(1)
+        self.outline_width.setSingleStep(0.1)
         readability_form.addRow("描边宽度", self.outline_width)
         self.shadow = QCheckBox("启用阴影")
         readability_form.addRow("", self.shadow)
@@ -555,7 +588,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(page, "外观")
         for control in (
             self.mode,
-            self.max_rows,
+            self.max_sentences,
             self.font,
             self.source_size,
             self.translation_size,
@@ -600,6 +633,8 @@ class SettingsDialog(QDialog):
             config.asr.language,
         )
         self._select(self.auto_standby, config.asr.auto_standby_seconds)
+        self._select(self.asr_threads, config.asr.num_threads)
+        self.silence_endpoint.setValue(config.asr.silence_endpoint_ms / 1000)
         self._select(self.source_lang, config.translation.source_lang)
         self._select(self.target_lang, config.translation.target_lang)
         self._select(self.backend, config.translation.backend)
@@ -620,7 +655,7 @@ class SettingsDialog(QDialog):
         self.preview_char_delta.setValue(config.segmentation.preview_char_delta)
         self.preference.setPlainText(config.translation.preference)
         self._select(self.mode, config.subtitle.mode)
-        self.max_rows.setValue(config.subtitle.max_rows)
+        self.max_sentences.setValue(config.subtitle.max_sentences)
         self.font.setCurrentFont(QFont(config.subtitle.font_family))
         self.source_size.setValue(config.subtitle.source_size)
         self.translation_size.setValue(config.subtitle.translation_size)
@@ -692,6 +727,8 @@ class SettingsDialog(QDialog):
         config.asr.model_dir = self.model_dir.text().strip()
         config.asr.language = self.asr_language.currentData()
         config.asr.auto_standby_seconds = self.auto_standby.currentData()
+        config.asr.num_threads = self.asr_threads.currentData()
+        config.asr.silence_endpoint_ms = round(self.silence_endpoint.value() * 1000)
         config.translation.backend = self.backend.currentData()
         config.translation.source_lang = self.source_lang.currentData()
         config.translation.target_lang = self.target_lang.currentData()
@@ -719,7 +756,7 @@ class SettingsDialog(QDialog):
                     terms[source.strip()] = target.strip()
         config.translation.glossary = terms
         config.subtitle.mode = self.mode.currentData()
-        config.subtitle.max_rows = self.max_rows.value()
+        config.subtitle.max_sentences = self.max_sentences.value()
         config.subtitle.font_family = self.font.currentFont().family()
         config.subtitle.source_size = self.source_size.value()
         config.subtitle.translation_size = self.translation_size.value()
@@ -748,7 +785,7 @@ class SettingsDialog(QDialog):
     def _restore_default_appearance(self) -> None:
         defaults = SubtitleConfig()
         self._select(self.mode, defaults.mode)
-        self.max_rows.setValue(defaults.max_rows)
+        self.max_sentences.setValue(defaults.max_sentences)
         self.font.setCurrentFont(QFont(defaults.font_family))
         self.source_size.setValue(defaults.source_size)
         self.translation_size.setValue(defaults.translation_size)

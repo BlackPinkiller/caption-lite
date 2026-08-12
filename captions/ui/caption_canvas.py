@@ -88,11 +88,24 @@ class CaptionCanvas(QWidget):
                 self.previous_cues.append(
                     CaptionCue(self.cue_id, self.source, self.translation)
                 )
-                self.previous_cues = self.previous_cues[-3:]
+                self.previous_cues = self.previous_cues[-6:]
             self.cue_id = cue_id
         self.source = source
         self.translation = translation
         self.update()
+
+    def set_translation(self, cue_id: int, translation: str) -> bool:
+        translation = translation.strip()
+        if cue_id == self.cue_id:
+            self.translation = translation
+            self.update()
+            return True
+        for cue in reversed(self.previous_cues):
+            if cue.cue_id == cue_id:
+                cue.translation = translation
+                self.update()
+                return True
+        return False
 
     def clear(self) -> None:
         self.source = self.translation = ""
@@ -101,10 +114,11 @@ class CaptionCanvas(QWidget):
         self.update()
 
     def _font(self, kind: str) -> QFont:
-        point_size = (
+        pixel_size = (
             self.style.source_size if kind == "source" else self.style.translation_size
         )
-        font = QFont(self.style.font_family, point_size)
+        font = QFont(self.style.font_family)
+        font.setPixelSize(pixel_size)
         font.setWeight(QFont.Weight(max(100, min(900, self.style.font_weight))))
         return font
 
@@ -138,75 +152,29 @@ class CaptionCanvas(QWidget):
 
     def _visible_lines(self, available: float) -> list[CaptionLine]:
         mode = self.style.mode
-        limit = max(2, min(6, self.style.max_rows))
+        limit = max(1, min(6, self.style.max_sentences))
         current = CaptionCue(self.cue_id, self.source, self.translation)
+        cues = [*self.previous_cues, current]
+        cues = [cue for cue in cues if cue.source or cue.translation][-limit:]
+        rows: list[tuple[str, str, float]] = []
+        for cue in cues:
+            opacity = (
+                self.style.preview_opacity
+                if cue is current
+                else self.style.old_opacity
+            )
+            if mode in {"source", "bilingual"} and cue.source:
+                rows.append((cue.source, "source", opacity))
+            if mode in {"translation", "bilingual"} and cue.translation:
+                rows.append((cue.translation, "translation", opacity))
 
-        if mode == "source":
-            rows = [
-                (cue.source, "source", self.style.old_opacity)
-                for cue in self.previous_cues
-                if cue.source
-            ]
-            if current.source:
-                rows.append((current.source, "source", self.style.preview_opacity))
-        if mode == "translation":
-            rows = [
-                (cue.translation, "translation", self.style.old_opacity)
-                for cue in self.previous_cues
-                if cue.translation
-            ]
-            if current.translation:
-                rows.append(
-                    (current.translation, "translation", self.style.preview_opacity)
-                )
-        if mode == "bilingual":
-            current_rows: list[tuple[str, str, float]] = []
-            if current.source:
-                current_rows.append(
-                    (current.source, "source", self.style.preview_opacity)
-                )
-            if current.translation:
-                current_rows.append(
-                    (current.translation, "translation", self.style.preview_opacity)
-                )
-            remaining = max(0, limit - len(current_rows))
-            older_groups: list[list[tuple[str, str, float]]] = []
-            for cue in reversed(self.previous_cues):
-                if remaining <= 0:
-                    break
-                pair = [
-                    (cue.source, "source", self.style.old_opacity),
-                    (cue.translation, "translation", self.style.old_opacity),
-                ]
-                pair = [row for row in pair if row[0]]
-                if not pair:
-                    continue
-                if remaining == 1:
-                    translated = next(
-                        (row for row in pair if row[1] == "translation"), pair[-1]
-                    )
-                    older_groups.append([translated])
-                    remaining = 0
-                else:
-                    selected = pair[-remaining:]
-                    older_groups.append(selected)
-                    remaining -= len(selected)
-            rows = [
-                row
-                for group in reversed(older_groups)
-                for row in group
-            ] + current_rows
-
-        rows = rows[-limit:]
         visible: list[CaptionLine] = []
         for text, kind, opacity in rows:
             wrapped = self._wrap_text(
                 text, self._font(kind), available, kind == "source"
             )
             visible.extend(CaptionLine(line, kind, opacity) for line in wrapped)
-        # `max_rows` limits physical display lines only. Recognition,
-        # translation, history, and the naturally wrapped text stay unchanged.
-        return visible[-limit:]
+        return visible
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)

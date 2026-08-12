@@ -156,6 +156,7 @@ class CaptionApplication(QObject):
         self.translation_session.google2_key_error.connect(
             self._google2_key_error
         )
+        self.translation_session.finished.connect(self._maybe_finish_quit)
 
     def _create_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(self.app_icon, self)
@@ -282,7 +283,7 @@ class CaptionApplication(QObject):
         self.model_loaded = False
         self.overlay.set_capturing(False)
         self.capture_action.setText("继续识别")
-        if self.closing:
+        if getattr(self, "closing", False):
             self._maybe_finish_quit()
         else:
             if self.restart_after_stop:
@@ -296,14 +297,16 @@ class CaptionApplication(QObject):
 
     @Slot(str, int)
     def _asr_partial(self, raw: str, revision: int) -> None:
+        if getattr(self, "closing", False):
+            return
         update = self.segmenter.update(raw)
         if update.committed:
             self._commit(update.committed, update.forced)
         active = update.active
         if active:
             self.history.set_live(source=active)
-            if self.config.subtitle.mode == "source":
-                self.overlay.canvas.set_cue(self.active_cue_id, active, "")
+            if self.config.subtitle.mode in {"source", "bilingual"}:
+                self._display_source(self.active_cue_id, active)
             self.translation_session.schedule_preview(
                 active,
                 self.history.records,
@@ -315,6 +318,8 @@ class CaptionApplication(QObject):
 
     @Slot()
     def _asr_endpoint(self) -> None:
+        if getattr(self, "closing", False):
+            return
         update = self.segmenter.flush()
         if update.committed:
             self._commit(update.committed, update.forced)
@@ -351,10 +356,17 @@ class CaptionApplication(QObject):
             record_id=index,
             cue_id=cue_id,
         )
-        if self.config.subtitle.mode == "source":
-            self.overlay.canvas.set_cue(cue_id, source, "")
+        if self.config.subtitle.mode in {"source", "bilingual"}:
+            self._display_source(cue_id, source)
         self.active_cue_id += 1
         self._restart_clear_timer()
+
+    def _display_source(self, cue_id: int, source: str) -> None:
+        canvas = self.overlay.canvas
+        if canvas.cue_id == cue_id:
+            canvas.set_content(source=source)
+        else:
+            canvas.set_cue(cue_id, source, "")
 
     @Slot()
     def _translation_previews_discarded(self) -> None:
@@ -381,30 +393,13 @@ class CaptionApplication(QObject):
             return
         self.display_generation = generation
         self.display_kind = job.kind
-        if self.config.subtitle.mode == "bilingual":
-            QTimer.singleShot(
-                650,
-                lambda current=generation, current_job=job: self._show_source_fallback(
-                    current, current_job
-                ),
-            )
-
-    def _show_source_fallback(self, generation: int, job: TranslationJob) -> None:
-        if (
-            not self.translation_session.has_job(generation)
-            or generation != self.display_generation
-            or self.config.subtitle.mode != "bilingual"
-            or self.overlay.canvas.cue_id == job.cue_id
-        ):
-            return
-        self.overlay.canvas.set_cue(job.cue_id, job.source, "")
-        self.history.set_live(source=job.source)
 
     def _display_translation(
         self, job: TranslationJob, text: str, *, final: bool = False
     ) -> None:
         canvas = self.overlay.canvas
         if job.cue_id < canvas.cue_id:
+            canvas.set_translation(job.cue_id, text)
             return
         if (
             job.cue_id == canvas.cue_id
@@ -412,7 +407,10 @@ class CaptionApplication(QObject):
             and len(text) <= len(canvas.translation)
         ):
             return
-        canvas.set_cue(job.cue_id, job.source, text)
+        source = job.source
+        if job.cue_id == canvas.cue_id:
+            source = getattr(canvas, "source", "") or source
+        canvas.set_cue(job.cue_id, source, text)
 
     @Slot(int, object, str)
     def _translation_progress(
@@ -425,7 +423,10 @@ class CaptionApplication(QObject):
             self.history.set_live_translation(job.source, text)
         elif job.kind == "commit" and job.index is not None:
             self.history.update_translation(job.index, text)
-            if generation == self.display_generation:
+            if (
+                generation == self.display_generation
+                or job.cue_id < self.overlay.canvas.cue_id
+            ):
                 self._display_translation(job, text)
 
     @Slot(int, object, str)
@@ -441,7 +442,10 @@ class CaptionApplication(QObject):
             self._set_status(self.status_before_test or "翻译连接正常")
         elif job.index is not None:
             self.history.update_translation(job.index, text)
-            if generation == self.display_generation:
+            if (
+                generation == self.display_generation
+                or job.cue_id < self.overlay.canvas.cue_id
+            ):
                 self._display_translation(job, text, final=True)
         self._restart_clear_timer()
 
@@ -511,14 +515,14 @@ class CaptionApplication(QObject):
         was_capturing = self.capturing
         had_asr_thread = self.capture_session.running
         asr_changed = config.asr != self.config.asr
-        model_changed = any(
+        recognizer_changed = any(
             getattr(config.asr, name) != getattr(self.config.asr, name)
             for name in (
                 "model_variant", "model_dir", "encoder", "decoder", "joiner",
-                "tokens", "language",
+                "tokens", "language", "num_threads", "silence_endpoint_ms",
             )
         )
-        if had_asr_thread and model_changed:
+        if had_asr_thread and recognizer_changed:
             self.restart_after_stop = was_capturing
             self.capture_session.stop()
         elif had_asr_thread and asr_changed:
@@ -551,7 +555,7 @@ class CaptionApplication(QObject):
                 self._set_model_status("已就绪")
         else:
             self._set_model_missing()
-        if had_asr_thread and model_changed:
+        if had_asr_thread and recognizer_changed:
             self._set_status("正在应用设置并重启识别…")
 
     @Slot(object)
@@ -817,7 +821,11 @@ class CaptionApplication(QObject):
     def _maybe_finish_quit(self) -> None:
         if not self.closing:
             return
-        if self.capture_session.running or self.download_session.running:
+        if (
+            self.capture_session.running
+            or self.download_session.running
+            or self.translation_session.shutting_down
+        ):
             return
         self.quit_watchdog.stop()
         self.tray.hide()

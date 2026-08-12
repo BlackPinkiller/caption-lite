@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+import threading
 import time
+
+import httpx
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -27,6 +30,7 @@ class TranslationSession(QObject):
     previews_discarded = Signal()
     google2_key_ready = Signal(str)
     google2_key_error = Signal(str)
+    finished = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -36,6 +40,13 @@ class TranslationSession(QObject):
             thread_name_prefix="google2-key",
         )
         self._key_future: Future | None = None
+        self._key_client = httpx.Client(http2=False)
+        self._closing = False
+        self._shutdown_complete = threading.Event()
+        self._shutdown_thread: threading.Thread | None = None
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(20)
+        self._shutdown_timer.timeout.connect(self._poll_shutdown)
         self.jobs: dict[int, TranslationJob] = {}
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
@@ -62,6 +73,8 @@ class TranslationSession(QObject):
         record_id: int,
         cue_id: int,
     ) -> int:
+        if self._closing:
+            return 0
         self._reset_preview_schedule()
         self._discard_preview_jobs()
         self.translator.cancel_pending()
@@ -72,6 +85,8 @@ class TranslationSession(QObject):
         return generation
 
     def request_test(self, text: str, config: TranslationConfig) -> int:
+        if self._closing:
+            return 0
         generation = self.translator.translate(text, [], config)
         self.jobs[generation] = TranslationJob("test", None, text, 0)
         return generation
@@ -84,6 +99,8 @@ class TranslationSession(QObject):
         segmentation: SegmentationConfig,
         cue_id: int,
     ) -> None:
+        if self._closing:
+            return
         source = source.strip()
         self.pending_preview_text = source
         self.pending_history = history
@@ -112,12 +129,19 @@ class TranslationSession(QObject):
         return generation in self.jobs
 
     def request_google2_key(self) -> None:
+        if self._closing:
+            return
         if self._key_future is not None and not self._key_future.done():
             return
-        future = self._key_executor.submit(Translator.acquire_google2_api_key)
+        future = self._key_executor.submit(
+            Translator.acquire_google2_api_key,
+            client=self._key_client,
+        )
         self._key_future = future
 
         def done(completed: Future) -> None:
+            if self._closing:
+                return
             try:
                 key = completed.result()
             except Exception as error:
@@ -128,12 +152,53 @@ class TranslationSession(QObject):
         future.add_done_callback(done)
 
     def close(self) -> None:
-        self.preview_timer.stop()
+        if self._closing:
+            return
+        self._closing = True
+        self._reset_preview_schedule()
+        self.jobs.clear()
+        if self._key_future is not None:
+            self._key_future.cancel()
+        try:
+            self._key_client.close()
+        except Exception:
+            pass
         self._key_executor.shutdown(wait=False, cancel_futures=True)
         self.translator.close()
+        self._shutdown_thread = threading.Thread(
+            target=self._finish_shutdown,
+            name="translation-shutdown",
+            daemon=True,
+        )
+        self._shutdown_thread.start()
+        self._shutdown_timer.start()
+
+    @property
+    def shutting_down(self) -> bool:
+        return self._closing and not self._shutdown_complete.is_set()
+
+    def _finish_shutdown(self) -> None:
+        try:
+            self._key_executor.shutdown(wait=True, cancel_futures=True)
+            self.translator.wait_closed()
+        finally:
+            self._shutdown_complete.set()
+
+    @Slot()
+    def _poll_shutdown(self) -> None:
+        if not self._shutdown_complete.is_set():
+            return
+        self._shutdown_timer.stop()
+        if self._shutdown_thread is not None:
+            self._shutdown_thread.join()
+            self._shutdown_thread = None
+        self._key_future = None
+        self.finished.emit()
 
     @Slot()
     def _send_pending_preview(self) -> None:
+        if self._closing:
+            return
         source = self.pending_preview_text.strip()
         config = self.pending_config
         segmentation = self.pending_segmentation

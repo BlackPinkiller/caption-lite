@@ -10,12 +10,14 @@ from PySide6.QtCore import QLockFile, QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-from captions.app import CaptionApplication
-
-
 def main() -> int:
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
+    # SoundCard initializes COM while captions.app is imported. Qt must create
+    # the GUI thread's STA apartment first, otherwise QWindowsContext reports
+    # RPC_E_CHANGED_MODE during QApplication startup.
+    from captions.app import CaptionApplication
+
     instance_lock = QLockFile(
         str(Path(tempfile.gettempdir()) / "RealtimeSubtitle.instance.lock")
     )

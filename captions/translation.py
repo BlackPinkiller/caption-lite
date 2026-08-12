@@ -71,6 +71,42 @@ class StaleTranslationError(RuntimeError):
     pass
 
 
+class TranslationCancellation:
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._response: httpx.Response | None = None
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def cancel(self) -> None:
+        self._event.set()
+        with self._lock:
+            response = self._response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def attach(self, response: httpx.Response) -> None:
+        with self._lock:
+            if self._event.is_set():
+                close_now = True
+            else:
+                self._response = response
+                close_now = False
+        if close_now:
+            response.close()
+            raise CancelledError()
+
+    def detach(self, response: httpx.Response) -> None:
+        with self._lock:
+            if self._response is response:
+                self._response = None
+
+
 def translation_queue_expired(
     submitted_at: float, timeout_ms: int, *, now: float | None = None
 ) -> bool:
@@ -141,7 +177,9 @@ class Translator(QObject):
         self._futures: set[Future] = set()
         self._final_futures: list[Future] = []
         self._overload_cancellations: set[Future] = set()
+        self._cancellations: dict[Future, TranslationCancellation] = {}
         self._pending_preview: Future | None = None
+        self._preview_cancel: TranslationCancellation | None = None
         self._lock = threading.Lock()
         limits = httpx.Limits(
             max_connections=2,
@@ -161,18 +199,25 @@ class Translator(QObject):
         *,
         preview: bool = False,
     ) -> int:
+        with self._lock:
+            if self._closing:
+                raise RuntimeError("翻译器正在关闭")
         self._generation += 1
         generation = self._generation
         context_segments = max(0, int(config.context_segments))
         snapshot = list(history[-context_segments:]) if context_segments else []
-        if preview and self._pending_preview is not None:
-            self._pending_preview.cancel()
+        if preview:
+            self._cancel_preview()
         if not preview:
             self._make_room_for_final_translation()
         executor = self._preview_executor if preview else self._final_executor
         client = self._preview_client if preview else self._final_client
         submitted_at = time.monotonic()
+        cancellation = TranslationCancellation()
+
         def request() -> str:
+            if cancellation is not None and cancellation.is_set():
+                raise CancelledError()
             if not preview and translation_queue_expired(
                 submitted_at, config.timeout_ms
             ):
@@ -184,30 +229,38 @@ class Translator(QObject):
                 config,
                 lambda partial: self.signals.progress.emit(generation, partial),
                 client=client,
+                cancellation=cancellation,
             )
 
         future = executor.submit(request)
         with self._lock:
             if preview:
                 self._pending_preview = future
+                self._preview_cancel = cancellation
             else:
                 self._final_futures.append(future)
+            self._cancellations[future] = cancellation
             self._futures.add(future)
 
         def done(completed: Future) -> None:
             with self._lock:
                 overloaded = completed in self._overload_cancellations
+                closing = self._closing
                 self._overload_cancellations.discard(completed)
+                self._cancellations.pop(completed, None)
                 self._futures.discard(completed)
                 if completed in self._final_futures:
                     self._final_futures.remove(completed)
                 if self._pending_preview is completed:
                     self._pending_preview = None
+                    self._preview_cancel = None
                 close_clients = (
                     self._closing and not self._futures and not self._clients_closed
                 )
                 if close_clients:
                     self._clients_closed = True
+            if closing:
+                return
             try:
                 result = completed.result()
             except StaleTranslationError:
@@ -252,24 +305,45 @@ class Translator(QObject):
 
     def cancel_pending(self) -> None:
         self._generation += 1
+        self._cancel_preview()
+
+    def _cancel_preview(self) -> None:
         with self._lock:
             pending_preview = self._pending_preview
+            preview_cancel = self._preview_cancel
+        if preview_cancel is not None:
+            preview_cancel.cancel()
         if pending_preview is not None:
             pending_preview.cancel()
 
     def close(self) -> None:
-        self.cancel_pending()
         with self._lock:
+            if self._closing:
+                return
             self._closing = True
+            cancellations = list(self._cancellations.values())
+            futures = list(self._futures)
+        for cancellation in cancellations:
+            cancellation.cancel()
+        for future in futures:
+            future.cancel()
+        try:
+            self._preview_client.close()
+        except Exception:
+            pass
+        try:
+            self._final_client.close()
+        except Exception:
+            pass
+        with self._lock:
+            self._clients_closed = True
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
         self._final_executor.shutdown(wait=False, cancel_futures=True)
-        with self._lock:
-            close_clients = not self._futures and not self._clients_closed
-            if close_clients:
-                self._clients_closed = True
-        if close_clients:
-            self._preview_client.close()
-            self._final_client.close()
+
+    def wait_closed(self) -> None:
+        self.close()
+        self._preview_executor.shutdown(wait=True, cancel_futures=True)
+        self._final_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def acquire_google2_api_key(
@@ -333,28 +407,41 @@ class Translator(QObject):
         progress: Callable[[str], None],
         *,
         client: httpx.Client | None = None,
+        cancellation: TranslationCancellation | None = None,
     ) -> str:
+        if cancellation is not None and cancellation.is_set():
+            raise CancelledError()
         timeout = max(1.0, config.timeout_ms / 1000)
         if config.backend == "google2":
-            return Translator._google2(text, config, timeout, client=client)
-        if config.backend == "deepl":
-            return Translator._deepl(text, config, timeout, client=client)
-        prompt = build_hymt_prompt(text, history, config)
-        payload = {
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "stream": config.stream,
-            "max_tokens": LLAMA_MAX_TOKENS,
-        }
-        if config.stream:
-            return Translator._llama_stream(
-                config.llama_url, payload, timeout, progress, client=client
-            )
-        post = client.post if client is not None else httpx.post
-        response = post(config.llama_url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+            result = Translator._google2(text, config, timeout, client=client)
+        elif config.backend == "deepl":
+            result = Translator._deepl(text, config, timeout, client=client)
+        else:
+            prompt = build_hymt_prompt(text, history, config)
+            payload = {
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "stream": config.stream,
+                "max_tokens": LLAMA_MAX_TOKENS,
+            }
+            if config.stream:
+                result = Translator._llama_stream(
+                    config.llama_url,
+                    payload,
+                    timeout,
+                    progress,
+                    client=client,
+                    cancellation=cancellation,
+                )
+            else:
+                post = client.post if client is not None else httpx.post
+                response = post(config.llama_url, json=payload, timeout=timeout)
+                response.raise_for_status()
+                data = response.json()
+                result = data["choices"][0]["message"]["content"].strip()
+        if cancellation is not None and cancellation.is_set():
+            raise CancelledError()
+        return result
 
     @staticmethod
     def _llama_stream(
@@ -364,27 +451,48 @@ class Translator(QObject):
         progress: Callable[[str], None],
         *,
         client: httpx.Client | None = None,
+        cancellation: TranslationCancellation | None = None,
     ) -> str:
+        if cancellation is not None and cancellation.is_set():
+            raise CancelledError()
         text = ""
         started_at = time.monotonic()
         stream = client.stream if client is not None else httpx.stream
-        with stream("POST", url, json=payload, timeout=timeout) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if time.monotonic() - started_at > timeout:
-                    raise TimeoutError("翻译请求超过总时限")
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                event = json.loads(data)
-                delta = event.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                if delta:
-                    if len(text) + len(delta) > MAX_STREAM_RESPONSE_CHARS:
-                        raise RuntimeError("流式翻译响应过长")
-                    text += delta
-                    progress(text.strip())
+        try:
+            with stream("POST", url, json=payload, timeout=timeout) as response:
+                if cancellation is not None:
+                    cancellation.attach(response)
+                try:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if cancellation is not None and cancellation.is_set():
+                            raise CancelledError()
+                        if time.monotonic() - started_at > timeout:
+                            raise TimeoutError("翻译请求超过总时限")
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        event = json.loads(data)
+                        delta = event.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if not delta:
+                            continue
+                        if cancellation is not None and cancellation.is_set():
+                            raise CancelledError()
+                        if len(text) + len(delta) > MAX_STREAM_RESPONSE_CHARS:
+                            raise RuntimeError("流式翻译响应过长")
+                        text += delta
+                        progress(text.strip())
+                finally:
+                    if cancellation is not None:
+                        cancellation.detach(response)
+        except (httpx.HTTPError, RuntimeError) as error:
+            if cancellation is not None and cancellation.is_set():
+                raise CancelledError() from error
+            raise
+        if cancellation is not None and cancellation.is_set():
+            raise CancelledError()
         return text.strip()
 
     @staticmethod

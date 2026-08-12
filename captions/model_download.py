@@ -49,9 +49,18 @@ class ModelDownloadWorker(QObject):
         self.expected_sha256 = expected_sha256.lower()
         self.required_files = required_files
         self._cancel = threading.Event()
+        self._response_lock = threading.Lock()
+        self._response = None
 
     def cancel(self) -> None:
         self._cancel.set()
+        with self._response_lock:
+            response = self._response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
 
     def _check_cancelled(self) -> None:
         if self._cancel.is_set():
@@ -73,19 +82,26 @@ class ModelDownloadWorker(QObject):
                 self.model_url, headers={"User-Agent": "RealtimeSubtitle/1.0"}
             )
             with urllib.request.urlopen(request, timeout=30) as response:
-                total = int(response.headers.get("Content-Length") or 0)
-                downloaded = 0
-                digest = hashlib.sha256()
-                with archive.open("wb") as output:
-                    while True:
-                        self._check_cancelled()
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        self.progress.emit(downloaded, total)
+                with self._response_lock:
+                    self._response = response
+                try:
+                    total = int(response.headers.get("Content-Length") or 0)
+                    downloaded = 0
+                    digest = hashlib.sha256()
+                    with archive.open("wb") as output:
+                        while True:
+                            self._check_cancelled()
+                            chunk = response.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                            digest.update(chunk)
+                            downloaded += len(chunk)
+                            self.progress.emit(downloaded, total)
+                finally:
+                    with self._response_lock:
+                        if self._response is response:
+                            self._response = None
 
             if self.expected_size is not None and downloaded != self.expected_size:
                 raise RuntimeError(
@@ -128,7 +144,10 @@ class ModelDownloadWorker(QObject):
         except DownloadCancelled:
             self.cancelled.emit()
         except Exception as error:
-            self.error.emit(str(error))
+            if self._cancel.is_set():
+                self.cancelled.emit()
+            else:
+                self.error.emit(str(error))
         finally:
             archive.unlink(missing_ok=True)
             if staging.exists():

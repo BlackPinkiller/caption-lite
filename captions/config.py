@@ -152,6 +152,8 @@ class AsrConfig:
     tokens: str = "tokens.txt"
     language: str = "en"
     auto_standby_seconds: int = 0
+    num_threads: int = 2
+    silence_endpoint_ms: int = 400
 
 
 @dataclass
@@ -177,22 +179,22 @@ class SegmentationConfig:
     split_lookback_chars: int = 32
     split_lookahead_chars: int = 160
     max_seconds: int = 20
-    preview_min_chars: int = 6
-    preview_interval_ms: int = 900
+    preview_min_chars: int = 4
+    preview_interval_ms: int = 600
     preview_char_delta: int = 18
 
 
 @dataclass
 class SubtitleConfig:
     mode: str = "bilingual"
-    max_rows: int = 2
+    max_sentences: int = 2
     font_family: str = "Microsoft YaHei UI"
     source_size: int = 30
     translation_size: int = 32
     font_weight: int = 600
     text_color: str = "#ffffff"
     outline_color: str = "#000000"
-    outline_width: float = 2.0
+    outline_width: float = 0.1
     shadow: bool = True
     line_height: float = 1.25
     align: str = "center"
@@ -269,6 +271,11 @@ def _normalize_config(config: AppConfig) -> None:
     config.asr.auto_standby_seconds = int(
         _clamp(config.asr.auto_standby_seconds, 0, 3600)
     )
+    if config.asr.num_threads not in {1, 2, 4, 8}:
+        config.asr.num_threads = defaults.asr.num_threads
+    config.asr.silence_endpoint_ms = int(
+        _clamp(config.asr.silence_endpoint_ms, 300, 1500)
+    )
 
     if config.translation.backend not in {"llama", "google2", "deepl"}:
         config.translation.backend = defaults.translation.backend
@@ -306,11 +313,11 @@ def _normalize_config(config: AppConfig) -> None:
     subtitle = config.subtitle
     if subtitle.mode not in {"bilingual", "source", "translation"}:
         subtitle.mode = defaults.subtitle.mode
-    subtitle.max_rows = int(_clamp(subtitle.max_rows, 2, 6))
+    subtitle.max_sentences = int(_clamp(subtitle.max_sentences, 1, 6))
     subtitle.source_size = int(_clamp(subtitle.source_size, 14, 72))
     subtitle.translation_size = int(_clamp(subtitle.translation_size, 14, 72))
     subtitle.font_weight = int(_clamp(subtitle.font_weight, 100, 900))
-    subtitle.outline_width = float(_clamp(subtitle.outline_width, 0, 8))
+    subtitle.outline_width = float(_clamp(subtitle.outline_width, 0, 1))
     subtitle.line_height = float(_clamp(subtitle.line_height, 0.8, 3.0))
     if subtitle.align not in {"left", "center", "right"}:
         subtitle.align = defaults.subtitle.align
@@ -363,10 +370,14 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
                     legacy_target = values.get("deepl_target_lang")
                     if isinstance(legacy_target, str) and legacy_target:
                         values = {**values, "target_lang": legacy_target}
-                if section == "subtitle" and "max_rows" not in values:
-                    legacy_rows = values.get("max_lines_per_language")
-                    if isinstance(legacy_rows, int):
-                        values = {**values, "max_rows": legacy_rows}
+                if section == "subtitle" and "max_sentences" not in values:
+                    legacy_limit = values.get(
+                        "max_rows", values.get("max_lines_per_language")
+                    )
+                    if isinstance(legacy_limit, int):
+                        values = {**values, "max_sentences": legacy_limit}
+                if section == "subtitle" and values.get("outline_width") == 2.0:
+                    values = {**values, "outline_width": SubtitleConfig().outline_width}
                 _merge_dataclass(getattr(config, section), values)
     _normalize_config(config)
     try:

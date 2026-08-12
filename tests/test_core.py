@@ -8,6 +8,8 @@ import os
 import io
 import hashlib
 import tarfile
+import warnings
+from concurrent.futures import CancelledError
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -18,10 +20,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from captions.app import CaptionApplication, TranslationJob
-from captions.audio_asr import AudioAsrWorker, AutoStandbyDetector, VadSpeechGate
+from captions.audio_asr import (
+    CAPTURE_BLOCK_SIZE,
+    CAPTURE_BUFFER_SIZE,
+    VAD_WINDOW_SIZE,
+    AudioAsrWorker,
+    AutoStandbyDetector,
+    VadSpeechGate,
+    _record_samples,
+)
 from captions.config import (
     AppConfig,
     CHINESE_MODEL_NAME,
@@ -41,6 +52,7 @@ from captions.segmenter import Segmenter
 from captions.translation import (
     HistoryRecord,
     MAX_PENDING_FINAL_TRANSLATIONS,
+    TranslationCancellation,
     Translator,
     build_hymt_prompt,
     matching_glossary,
@@ -274,6 +286,58 @@ class TranslationTests(unittest.TestCase):
 
         self.assertEqual(calls, ["first", "latest"])
 
+    def test_running_preview_cooperatively_stops_for_the_latest_request(self) -> None:
+        started = threading.Event()
+        cancelled_running_request = threading.Event()
+        calls: list[str] = []
+
+        def fake_request(text, history, config, progress, *, cancellation=None, **kwargs):
+            calls.append(text)
+            if text == "first":
+                started.set()
+                deadline = time.monotonic() + 2
+                while not cancellation.is_set() and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                if cancellation.is_set():
+                    cancelled_running_request.set()
+                    raise CancelledError()
+            return text
+
+        with patch.object(Translator, "_request", staticmethod(fake_request)):
+            translator = Translator()
+            translator.translate("first", [], AppConfig().translation, preview=True)
+            self.assertTrue(started.wait(1))
+            translator.translate("latest", [], AppConfig().translation, preview=True)
+            self.assertTrue(cancelled_running_request.wait(1))
+            deadline = time.monotonic() + 2
+            while translator._futures and time.monotonic() < deadline:
+                time.sleep(0.01)
+            translator.close()
+
+        self.assertEqual(calls, ["first", "latest"])
+
+    def test_close_cancels_and_joins_a_running_final_translation(self) -> None:
+        started = threading.Event()
+        cancelled = threading.Event()
+
+        def fake_request(text, history, config, progress, *, cancellation=None, **kwargs):
+            started.set()
+            while not cancellation.is_set():
+                time.sleep(0.005)
+            cancelled.set()
+            raise CancelledError()
+
+        with patch.object(Translator, "_request", staticmethod(fake_request)):
+            translator = Translator()
+            translator.translate("final", [], AppConfig().translation)
+            self.assertTrue(started.wait(1))
+
+            translator.close()
+            translator.wait_closed()
+
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(translator._futures, set())
+
     def test_final_queue_is_bounded_when_the_backend_stalls(self) -> None:
         started = threading.Event()
         release = threading.Event()
@@ -379,6 +443,91 @@ class TranslationTests(unittest.TestCase):
                     "http://localhost", {}, 1.0, lambda partial: None
                 )
 
+    def test_streaming_preview_stops_after_cooperative_cancellation(self) -> None:
+        cancellation = TranslationCancellation()
+        updates: list[str] = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def close(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"first"}}]}'
+                yield 'data: {"choices":[{"delta":{"content":"second"}}]}'
+
+        def progress(text: str) -> None:
+            updates.append(text)
+            cancellation.cancel()
+
+        with patch("captions.translation.httpx.stream", return_value=FakeResponse()):
+            with self.assertRaises(CancelledError):
+                Translator._llama_stream(
+                    "http://localhost",
+                    {},
+                    15.0,
+                    progress,
+                    cancellation=cancellation,
+                )
+
+        self.assertEqual(updates, ["first"])
+
+    def test_cancellation_closes_a_stream_blocked_before_its_first_token(self) -> None:
+        cancellation = TranslationCancellation()
+        entered = threading.Event()
+        released = threading.Event()
+        errors: list[Exception] = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                entered.set()
+                released.wait(2)
+                if False:
+                    yield ""
+
+            def close(self):
+                released.set()
+
+        def request() -> None:
+            try:
+                Translator._llama_stream(
+                    "http://localhost",
+                    {},
+                    15.0,
+                    lambda partial: None,
+                    cancellation=cancellation,
+                )
+            except Exception as error:
+                errors.append(error)
+
+        with patch("captions.translation.httpx.stream", return_value=FakeResponse()):
+            thread = threading.Thread(target=request)
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            cancellation.cancel()
+            thread.join(1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], CancelledError)
+
     def test_current_preview_progress_is_not_hidden_by_a_newer_queued_job(self) -> None:
         updates: list[str] = []
         canvas = SimpleNamespace(
@@ -400,10 +549,70 @@ class TranslationTests(unittest.TestCase):
 
         self.assertEqual(updates, ["visible token"])
 
+    def test_bilingual_partial_displays_source_before_translation(self) -> None:
+        canvas_updates: list[tuple[str, str]] = []
+        canvas = SimpleNamespace(cue_id=0, source="", translation="")
+
+        def set_cue(cue_id: int, source: str, translation: str) -> None:
+            canvas.cue_id = cue_id
+            canvas.source = source
+            canvas.translation = translation
+            canvas_updates.append((source, translation))
+
+        def set_content(*, source=None, translation=None) -> None:
+            if source is not None:
+                canvas.source = source
+            if translation is not None:
+                canvas.translation = translation
+            canvas_updates.append((canvas.source, canvas.translation))
+
+        canvas.set_cue = set_cue
+        canvas.set_content = set_content
+        config = AppConfig()
+        config.subtitle.mode = "bilingual"
+        preview_requests: list[str] = []
+        app = SimpleNamespace(
+            segmenter=Segmenter(),
+            config=config,
+            active_cue_id=7,
+            overlay=SimpleNamespace(canvas=canvas),
+            history=SimpleNamespace(
+                records=[],
+                set_live=lambda **values: None,
+            ),
+            translation_session=SimpleNamespace(
+                schedule_preview=lambda source, *args: preview_requests.append(source)
+            ),
+            _restart_clear_timer=lambda: None,
+        )
+        app._commit = lambda *args: None
+        app._display_source = lambda cue_id, source: CaptionApplication._display_source(
+            app, cue_id, source
+        )
+
+        CaptionApplication._asr_partial(app, "After", 1)
+        canvas.translation = "之后"
+        CaptionApplication._asr_partial(app, "After early", 2)
+
+        self.assertEqual(
+            canvas_updates,
+            [("After", ""), ("After early", "之后")],
+        )
+        self.assertEqual(preview_requests, ["After", "After early"])
+
     def test_late_commit_result_updates_history_but_not_a_newer_caption(self) -> None:
-        canvas_updates: list[dict] = []
+        current_updates: list[dict] = []
+        previous_updates: list[tuple[int, str]] = []
         history_updates: list[tuple[int, str]] = []
         job = TranslationJob("commit", 4, "old sentence", 1)
+        canvas = SimpleNamespace(
+            cue_id=2,
+            source="new sentence",
+            translation="",
+            set_translation=lambda cue_id, text: previous_updates.append(
+                (cue_id, text)
+            ),
+        )
         app = SimpleNamespace(
             display_generation=2,
             display_kind="preview",
@@ -412,21 +621,18 @@ class TranslationTests(unittest.TestCase):
                     (index, text)
                 )
             ),
-            overlay=SimpleNamespace(
-                canvas=SimpleNamespace(
-                    set_content=lambda **values: canvas_updates.append(values)
-                )
-            ),
+            overlay=SimpleNamespace(canvas=canvas),
             _restart_clear_timer=lambda: None,
-            _display_translation=lambda job, text, final=False: canvas_updates.append(
-                {"source": job.source, "translation": text}
+            _display_translation=lambda job, text, final=False: CaptionApplication._display_translation(
+                app, job, text, final=final
             ),
         )
 
         CaptionApplication._translation_result(app, 1, job, "old translation")
 
         self.assertEqual(history_updates, [(4, "old translation")])
-        self.assertEqual(canvas_updates, [])
+        self.assertEqual(previous_updates, [(1, "old translation")])
+        self.assertEqual(current_updates, [])
 
     def test_active_sentence_defers_the_clear_timer(self) -> None:
         events: list[str] = []
@@ -497,8 +703,71 @@ class TranslationSessionTests(unittest.TestCase):
         self.assertEqual(discarded, [True])
         session.close()
 
+    def test_close_finishes_only_after_translation_threads_exit(self) -> None:
+        started = threading.Event()
+        finished: list[bool] = []
+
+        def fake_request(text, history, config, progress, *, cancellation=None, **kwargs):
+            started.set()
+            while not cancellation.is_set():
+                time.sleep(0.005)
+            raise CancelledError()
+
+        with patch.object(Translator, "_request", staticmethod(fake_request)):
+            session = TranslationSession()
+            session.finished.connect(lambda: finished.append(True))
+            session.request_commit(
+                "final",
+                [],
+                AppConfig().translation,
+                record_id=1,
+                cue_id=1,
+            )
+            self.assertTrue(started.wait(1))
+
+            session.close()
+            deadline = time.monotonic() + 2
+            while not finished and time.monotonic() < deadline:
+                self.qt_app.processEvents()
+                time.sleep(0.005)
+
+        self.assertEqual(finished, [True])
+        self.assertFalse(session.shutting_down)
+        self.assertFalse(
+            any(
+                thread.name.startswith(("translation-", "google2-key"))
+                for thread in threading.enumerate()
+            )
+        )
+
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_capture_uses_low_latency_reads_with_a_larger_device_buffer(self) -> None:
+        self.assertEqual(CAPTURE_BLOCK_SIZE, VAD_WINDOW_SIZE * 3)
+        self.assertAlmostEqual(CAPTURE_BLOCK_SIZE / 16000, 0.096)
+        self.assertGreater(CAPTURE_BUFFER_SIZE, CAPTURE_BLOCK_SIZE)
+        self.assertEqual(AppConfig().asr.num_threads, 2)
+
+    def test_recoverable_soundcard_discontinuity_warning_is_quiet(self) -> None:
+        class Recorder:
+            def record(self, *, numframes):
+                warnings.warn(
+                    "data discontinuity in recording",
+                    __import__("soundcard").SoundcardRuntimeWarning,
+                )
+                warnings.warn(
+                    "another soundcard warning",
+                    __import__("soundcard").SoundcardRuntimeWarning,
+                )
+                return np.zeros((numframes, 1), dtype=np.float32)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            samples = _record_samples(Recorder())
+
+        self.assertEqual(samples.shape, (CAPTURE_BLOCK_SIZE, 1))
+        self.assertEqual([str(item.message) for item in caught], ["another soundcard warning"])
+
     def test_pause_keeps_the_worker_and_loaded_model_alive(self) -> None:
         events: list[str] = []
         app = SimpleNamespace(
@@ -555,6 +824,73 @@ class CaptureLifecycleTests(unittest.TestCase):
         self.assertTrue(app.capturing)
         self.assertFalse(app.capture_paused)
 
+    def test_changing_asr_performance_restarts_an_active_recognizer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            old_config = AppConfig()
+            old_config.asr.model_dir = directory
+            for name in ("encoder", "decoder", "joiner", "tokens"):
+                (Path(directory) / getattr(old_config.asr, name)).write_bytes(b"x")
+            new_config = AppConfig()
+            new_config.asr.model_dir = directory
+            new_config.asr.num_threads = 4
+            events: list[str] = []
+            geometry = SimpleNamespace(
+                x=lambda: 10,
+                y=lambda: 20,
+                width=lambda: 800,
+                height=lambda: 200,
+            )
+            app = SimpleNamespace(
+                capturing=True,
+                capture_session=SimpleNamespace(
+                    running=True,
+                    stop=lambda: events.append("stopped"),
+                    set_auto_standby_seconds=lambda value: events.append(
+                        f"standby:{value}"
+                    ),
+                ),
+                config=old_config,
+                restart_after_stop=False,
+                segmenter=SimpleNamespace(),
+                overlay=SimpleNamespace(
+                    geometry=lambda: geometry,
+                    canvas=SimpleNamespace(set_style=lambda style: None),
+                    set_mode=lambda mode: None,
+                ),
+                model_loaded=True,
+                _save_config=lambda: None,
+                _set_model_status=lambda text: events.append(f"model:{text}"),
+                _set_model_missing=lambda: events.append("missing"),
+                _set_status=lambda text: events.append(f"status:{text}"),
+            )
+
+            CaptionApplication.apply_settings(app, new_config)
+
+        self.assertIn("stopped", events)
+        self.assertNotIn("standby:0", events)
+        self.assertTrue(app.restart_after_stop)
+        self.assertIs(app.config, new_config)
+        self.assertIn("status:正在应用设置并重启识别…", events)
+
+    def test_app_waits_for_translation_shutdown_before_quitting_qt(self) -> None:
+        events: list[str] = []
+        app = SimpleNamespace(
+            closing=True,
+            capture_session=SimpleNamespace(running=False),
+            download_session=SimpleNamespace(running=False),
+            translation_session=SimpleNamespace(shutting_down=True),
+            quit_watchdog=SimpleNamespace(stop=lambda: events.append("watchdog")),
+            tray=SimpleNamespace(hide=lambda: events.append("tray")),
+            qt_app=SimpleNamespace(quit=lambda: events.append("quit")),
+        )
+
+        CaptionApplication._maybe_finish_quit(app)
+        self.assertEqual(events, [])
+
+        app.translation_session.shutting_down = False
+        CaptionApplication._maybe_finish_quit(app)
+        self.assertEqual(events, ["watchdog", "tray", "quit"])
+
 
 class AudioAsrTests(unittest.TestCase):
     def test_auto_standby_enters_after_silence_and_wakes_on_audio(self) -> None:
@@ -597,6 +933,40 @@ class AudioAsrTests(unittest.TestCase):
 
         self.assertEqual(options, [])
 
+    def test_recognizer_uses_the_selected_thread_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = AppConfig()
+            config.asr.model_dir = directory
+            config.asr.num_threads = 4
+            for name in ("encoder", "decoder", "joiner", "tokens"):
+                (Path(directory) / getattr(config.asr, name)).write_bytes(b"x")
+            calls: list[dict[str, object]] = []
+            fake_sherpa = SimpleNamespace(
+                OnlineRecognizer=SimpleNamespace(
+                    from_transducer=lambda **kwargs: calls.append(kwargs) or object()
+                )
+            )
+
+            with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
+                AudioAsrWorker(config)._create_recognizer()
+
+        self.assertEqual(calls[0]["num_threads"], 4)
+
+    def test_vad_uses_the_configured_silence_endpoint(self) -> None:
+        config = AppConfig()
+        config.asr.silence_endpoint_ms = 900
+        vad_config = SimpleNamespace(silero_vad=SimpleNamespace())
+        fake_sherpa = SimpleNamespace(
+            VadModelConfig=lambda: vad_config,
+            VoiceActivityDetector=lambda config, **kwargs: config,
+        )
+
+        with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
+            created = AudioAsrWorker(config)._create_vad()
+
+        self.assertIs(created, vad_config)
+        self.assertEqual(vad_config.silero_vad.min_silence_duration, 0.9)
+
     def test_vad_gate_keeps_preroll_and_marks_the_speech_endpoint(self) -> None:
         class FakeVad:
             def __init__(self) -> None:
@@ -628,7 +998,7 @@ class AudioAsrTests(unittest.TestCase):
         np.testing.assert_array_equal(events[0][0], samples[:12])
 
     def test_bundled_silero_vad_ignores_digital_silence(self) -> None:
-        gate = VadSpeechGate(AudioAsrWorker._create_vad())
+        gate = VadSpeechGate(AudioAsrWorker(AppConfig())._create_vad())
         events = gate.process(np.zeros(16000, dtype=np.float32))
         self.assertEqual(events, [])
 
@@ -638,34 +1008,35 @@ class CaptionCanvasTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.qt_app = QApplication.instance() or QApplication([])
 
-    def _logical_lines(self, rows: int) -> list[tuple[str, str]]:
+    def _logical_lines(self, sentences: int) -> list[tuple[str, str]]:
         style = AppConfig().subtitle
-        style.max_rows = rows
+        style.max_sentences = sentences
         canvas = CaptionCanvas(style)
         canvas.set_cue(1, "oldest en", "旧一")
         canvas.set_cue(2, "previous en", "旧二")
         canvas.set_cue(3, "current en", "当前")
         return [(line.text, line.kind) for line in canvas._visible_lines(2000)]
 
-    def test_bilingual_row_budget_keeps_the_current_pair(self) -> None:
+    def test_one_bilingual_sentence_keeps_the_current_pair(self) -> None:
         self.assertEqual(
-            self._logical_lines(2),
+            self._logical_lines(1),
             [("current en", "source"), ("当前", "translation")],
         )
 
-    def test_three_rows_adds_the_previous_translation(self) -> None:
+    def test_two_bilingual_sentences_keep_both_complete_pairs(self) -> None:
         self.assertEqual(
-            self._logical_lines(3),
+            self._logical_lines(2),
             [
+                ("previous en", "source"),
                 ("旧二", "translation"),
                 ("current en", "source"),
                 ("当前", "translation"),
             ],
         )
 
-    def test_six_rows_adds_two_previous_pairs(self) -> None:
+    def test_three_bilingual_sentences_keep_three_complete_pairs(self) -> None:
         self.assertEqual(
-            self._logical_lines(6),
+            self._logical_lines(3),
             [
                 ("oldest en", "source"),
                 ("旧一", "translation"),
@@ -689,6 +1060,67 @@ class CaptionCanvasTests(unittest.TestCase):
         CaptionApplication._display_translation(app, job, "新的译文更长")
 
         self.assertEqual(updates, [(1, "source", "新的译文更长")])
+
+    def test_translation_does_not_restore_an_older_source_revision(self) -> None:
+        canvas = SimpleNamespace(
+            cue_id=1,
+            source="After early",
+            translation="",
+        )
+        updates: list[tuple[int, str, str]] = []
+        canvas.set_cue = lambda cue_id, source, translation: updates.append(
+            (cue_id, source, translation)
+        )
+        app = SimpleNamespace(overlay=SimpleNamespace(canvas=canvas))
+        job = TranslationJob("preview", None, "After", 1)
+
+        CaptionApplication._display_translation(app, job, "之后")
+
+        self.assertEqual(updates, [(1, "After early", "之后")])
+
+    def test_late_translation_updates_the_previous_cue_after_a_cut(self) -> None:
+        style = AppConfig().subtitle
+        canvas = CaptionCanvas(style)
+        canvas.set_cue(1, "First sentence", "")
+        canvas.set_cue(2, "Second sentence", "")
+        app = SimpleNamespace(overlay=SimpleNamespace(canvas=canvas))
+        job = TranslationJob("commit", 1, "First sentence", 1)
+
+        CaptionApplication._display_translation(app, job, "第一句", final=True)
+
+        self.assertEqual(canvas.cue_id, 2)
+        self.assertEqual(canvas.source, "Second sentence")
+        self.assertEqual(canvas.translation, "")
+        self.assertEqual(canvas.previous_cues[-1].translation, "第一句")
+
+    def test_newer_preview_does_not_block_a_late_final_translation(self) -> None:
+        style = AppConfig().subtitle
+        canvas = CaptionCanvas(style)
+        canvas.set_cue(1, "First sentence", "")
+        canvas.set_cue(2, "Second sentence", "第二句预览")
+        history_updates: list[tuple[int, str]] = []
+        app = SimpleNamespace(
+            display_generation=9,
+            display_kind="preview",
+            overlay=SimpleNamespace(canvas=canvas),
+            history=SimpleNamespace(
+                update_translation=lambda record_id, text: history_updates.append(
+                    (record_id, text)
+                )
+            ),
+            _display_translation=lambda job, text, final=False: CaptionApplication._display_translation(
+                app, job, text, final=final
+            ),
+            _restart_clear_timer=lambda: None,
+        )
+        old_final = TranslationJob("commit", 17, "First sentence", 1)
+
+        CaptionApplication._translation_result(app, 8, old_final, "第一句终稿")
+
+        self.assertEqual(history_updates, [(17, "第一句终稿")])
+        self.assertEqual(canvas.cue_id, 2)
+        self.assertEqual(canvas.translation, "第二句预览")
+        self.assertEqual(canvas.previous_cues[-1].translation, "第一句终稿")
 
     def test_preview_visibly_distinguishes_all_background_modes(self) -> None:
         def dark_pixels(background: str) -> int:
@@ -717,32 +1149,33 @@ class CaptionCanvasTests(unittest.TestCase):
         self.assertGreater(line, none + 1000)
         self.assertGreater(block, line + 1000)
 
-    def test_physical_wrapped_lines_respect_the_display_budget(self) -> None:
+    def test_natural_wrapping_never_drops_half_of_a_bilingual_sentence(self) -> None:
         style = AppConfig().subtitle
-        style.mode = "source"
-        style.max_rows = 2
+        style.mode = "bilingual"
+        style.max_sentences = 1
         canvas = CaptionCanvas(style)
         canvas.resize(420, 220)
         canvas.set_cue(
             1,
             "This is a deliberately long subtitle that wraps naturally across "
             "several physical lines in a narrow caption window.",
-            "",
+            "这是一条会在较窄字幕窗口中自然换成多行的完整译文。",
         )
 
         lines = canvas._visible_lines(380)
 
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(all(line.kind == "source" for line in lines))
+        self.assertGreater(len(lines), 2)
+        self.assertIn("source", {line.kind for line in lines})
+        self.assertIn("translation", {line.kind for line in lines})
 
-    def test_caption_size_setting_is_measured_in_points(self) -> None:
+    def test_caption_size_setting_is_measured_in_pixels(self) -> None:
         style = AppConfig().subtitle
         style.source_size = 30
         style.translation_size = 32
         canvas = CaptionCanvas(style)
 
-        self.assertEqual(canvas._font("source").pointSize(), 30)
-        self.assertEqual(canvas._font("translation").pointSize(), 32)
+        self.assertEqual(canvas._font("source").pixelSize(), 30)
+        self.assertEqual(canvas._font("translation").pixelSize(), 32)
 
 
 class SettingsDialogTests(unittest.TestCase):
@@ -782,6 +1215,35 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertFalse(dialog.asr_language.isEnabled())
         self.assertTrue(dialog.recognition_advanced.body.isHidden())
         self.assertTrue(dialog.translation_advanced.body.isHidden())
+        self.assertEqual(dialog.asr_threads.currentData(), 2)
+        self.assertEqual(
+            [
+                dialog.asr_threads.itemData(index)
+                for index in range(dialog.asr_threads.count())
+            ],
+            [1, 2, 4, 8],
+        )
+        self.assertEqual(dialog.silence_endpoint.value(), 0.4)
+        dialog.close()
+
+    def test_expanding_advanced_settings_does_not_select_the_heading(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        for section in (
+            dialog.recognition_advanced,
+            dialog.translation_advanced,
+        ):
+            self.assertFalse(section.toggle.isCheckable())
+            QTest.mouseClick(section.toggle, Qt.MouseButton.LeftButton)
+            self.qt_app.processEvents()
+            self.assertFalse(section.body.isHidden())
+            self.assertFalse(section.toggle.isChecked())
+            self.assertFalse(section.toggle.isDown())
+
+            QTest.mouseClick(section.toggle, Qt.MouseButton.LeftButton)
+            self.qt_app.processEvents()
+            self.assertTrue(section.body.isHidden())
+
         dialog.close()
 
     def test_settings_wheel_controls_only_scroll_the_page(self) -> None:
@@ -818,6 +1280,32 @@ class SettingsDialogTests(unittest.TestCase):
             self.assertEqual(control.focusPolicy(), Qt.FocusPolicy.StrongFocus)
         dialog.close()
 
+    def test_numeric_controls_accept_replacement_text_on_first_click(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        dialog.tabs.setCurrentIndex(2)
+        dialog.show()
+        self.qt_app.processEvents()
+        editor = dialog.source_size.lineEdit()
+
+        dialog.background_color.setFocus()
+        QTest.mouseClick(editor, Qt.MouseButton.LeftButton)
+        self.qt_app.processEvents()
+        QTest.keyClicks(editor, "40")
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+
+        self.assertEqual(dialog.source_size.value(), 40)
+        dialog.close()
+
+    def test_outline_control_uses_a_tenth_pixel_step_and_safe_range(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        self.assertEqual(dialog.outline_width.minimum(), 0.0)
+        self.assertEqual(dialog.outline_width.maximum(), 1.0)
+        self.assertEqual(dialog.outline_width.singleStep(), 0.1)
+        self.assertEqual(dialog.outline_width.decimals(), 1)
+        self.assertEqual(dialog.outline_width.value(), 0.1)
+        dialog.close()
+
     def test_multilingual_selection_uses_its_default_directory(self) -> None:
         dialog = SettingsDialog(AppConfig())
         dialog.model_variant.setCurrentIndex(
@@ -835,6 +1323,20 @@ class SettingsDialogTests(unittest.TestCase):
         )
         self.assertEqual(dialog.model_dir.text(), default_model_dir("multilingual"))
         self.assertIn(MULTILINGUAL_MODEL_NAME, dialog.model_dir.text())
+        dialog.close()
+
+    def test_advanced_asr_performance_controls_round_trip(self) -> None:
+        config = AppConfig()
+        config.asr.num_threads = 4
+        config.asr.silence_endpoint_ms = 900
+        dialog = SettingsDialog(config)
+
+        values = dialog.values()
+
+        self.assertEqual(dialog.asr_threads.currentData(), 4)
+        self.assertEqual(dialog.silence_endpoint.value(), 0.9)
+        self.assertEqual(values.asr.num_threads, 4)
+        self.assertEqual(values.asr.silence_endpoint_ms, 900)
         dialog.close()
 
     def test_recognition_language_only_updates_a_conflicting_source(self) -> None:
@@ -874,14 +1376,14 @@ class SettingsDialogTests(unittest.TestCase):
     def test_appearance_controls_round_trip_all_exposed_values(self) -> None:
         config = AppConfig()
         config.subtitle.mode = "source"
-        config.subtitle.max_rows = 5
+        config.subtitle.max_sentences = 5
         config.subtitle.font_family = self.qt_app.font().family()
         config.subtitle.source_size = 21
         config.subtitle.translation_size = 23
         config.subtitle.font_weight = 700
         config.subtitle.text_color = "#ffeecc"
         config.subtitle.outline_color = "#112233"
-        config.subtitle.outline_width = 1.5
+        config.subtitle.outline_width = 0.7
         config.subtitle.shadow = False
         config.subtitle.align = "right"
         config.subtitle.background = "block"
@@ -893,7 +1395,7 @@ class SettingsDialogTests(unittest.TestCase):
         values = dialog.values().subtitle
 
         for name in (
-            "mode", "max_rows", "font_family", "source_size",
+            "mode", "max_sentences", "font_family", "source_size",
             "translation_size", "font_weight", "text_color", "outline_color",
             "outline_width", "shadow", "align", "background",
             "background_color", "padding", "stay_ms",
@@ -1123,7 +1625,7 @@ class ConfigTests(unittest.TestCase):
             path = Path(directory) / "config.json"
             path.write_text(
                 '{"translation":{"backend":42,"timeout_ms":999999},'
-                '"subtitle":{"mode":"unknown","max_rows":500}}',
+                '"subtitle":{"mode":"unknown","max_sentences":500}}',
                 encoding="utf-8",
             )
 
@@ -1132,13 +1634,66 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(loaded.translation.backend, "llama")
             self.assertEqual(loaded.translation.timeout_ms, 120000)
             self.assertEqual(loaded.subtitle.mode, "bilingual")
-            self.assertEqual(loaded.subtitle.max_rows, 6)
+            self.assertEqual(loaded.subtitle.max_sentences, 6)
+
+    def test_legacy_row_limit_migrates_to_sentence_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"max_rows":3}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.max_sentences, 3)
+
+    def test_legacy_default_outline_migrates_to_the_new_thin_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"outline_width":2.0}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.outline_width, 0.1)
+
+    def test_asr_performance_options_are_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"asr":{"num_threads":0,"silence_endpoint_ms":2500}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.asr.num_threads, 2)
+        self.assertEqual(loaded.asr.silence_endpoint_ms, 1500)
+
+    def test_outline_width_is_capped_at_one_pixel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"outline_width":1.5}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.outline_width, 1.0)
 
     def test_new_features_keep_existing_defaults(self) -> None:
         config = AppConfig()
         self.assertEqual(config.asr.model_variant, "english")
         self.assertEqual(config.asr.language, "en")
         self.assertEqual(config.asr.auto_standby_seconds, 0)
+        self.assertEqual(config.asr.num_threads, 2)
+        self.assertEqual(config.asr.silence_endpoint_ms, 400)
+        self.assertEqual(config.segmentation.preview_min_chars, 4)
+        self.assertEqual(config.segmentation.preview_interval_ms, 600)
         self.assertEqual(config.translation.backend, "llama")
         self.assertEqual(config.translation.source_lang, "EN")
         self.assertEqual(config.translation.target_lang, "ZH-HANS")
@@ -1150,6 +1705,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.asr.model_variant, "english")
         self.assertEqual(loaded.asr.language, "en")
         self.assertEqual(loaded.asr.auto_standby_seconds, 0)
+        self.assertEqual(loaded.asr.num_threads, 2)
+        self.assertEqual(loaded.asr.silence_endpoint_ms, 400)
+        self.assertEqual(loaded.segmentation.preview_min_chars, 4)
+        self.assertEqual(loaded.segmentation.preview_interval_ms, 600)
         self.assertEqual(loaded.translation.deepl_api_plan, "free")
         self.assertEqual(loaded.translation.source_lang, "EN")
         self.assertEqual(loaded.translation.target_lang, "ZH-HANS")
@@ -1312,6 +1871,56 @@ class ModelDownloadTests(unittest.TestCase):
             self.assertTrue(errors)
             self.assertFalse(destination.exists())
             self.assertFalse(any(Path(directory).glob(".*.download")))
+
+    def test_cancel_closes_a_blocked_response_and_removes_temporary_files(self) -> None:
+        entered = threading.Event()
+        released = threading.Event()
+
+        class BlockingResponse:
+            headers = {"Content-Length": "1"}
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+            def read(self, size: int) -> bytes:
+                entered.set()
+                released.wait(2)
+                if self.closed:
+                    raise OSError("response closed")
+                return b"x"
+
+            def close(self) -> None:
+                self.closed = True
+                released.set()
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "model"
+            response = BlockingResponse()
+            cancelled: list[bool] = []
+            worker = ModelDownloadWorker(destination)
+            worker.cancelled.connect(lambda: cancelled.append(True))
+            with patch(
+                "captions.model_download.urllib.request.urlopen",
+                return_value=response,
+            ):
+                thread = threading.Thread(target=worker.run)
+                thread.start()
+                self.assertTrue(entered.wait(1))
+                worker.cancel()
+                thread.join(2)
+                QApplication.instance().processEvents()
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(cancelled, [True])
+            self.assertFalse(destination.exists())
+            self.assertFalse(any(Path(directory).glob(".*.download")))
+            self.assertFalse(any(Path(directory).glob(".*.extracting")))
 
 
 if __name__ == "__main__":
