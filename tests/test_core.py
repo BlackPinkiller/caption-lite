@@ -42,6 +42,7 @@ from captions.translation import (
     matching_glossary,
     translation_queue_expired,
 )
+from captions.translation_session import TranslationSession
 from captions.ui.caption_canvas import CaptionCanvas
 from captions.ui.history_dialog import (
     HISTORY_PAGE_SIZE,
@@ -321,11 +322,8 @@ class TranslationTests(unittest.TestCase):
         canvas = SimpleNamespace(
             set_content=lambda **values: updates.append(values["translation"])
         )
+        job = TranslationJob("preview", None, "first", 1)
         app = SimpleNamespace(
-            translation_jobs={
-                1: TranslationJob("preview", None, "first", 1),
-                2: TranslationJob("preview", None, "latest", 1),
-            },
             display_generation=1,
             overlay=SimpleNamespace(canvas=canvas),
             _display_translation=lambda job, text: updates.append(text),
@@ -336,15 +334,15 @@ class TranslationTests(unittest.TestCase):
             ),
         )
 
-        CaptionApplication._translation_progress(app, 1, "visible token")
+        CaptionApplication._translation_progress(app, 1, job, "visible token")
 
         self.assertEqual(updates, ["visible token"])
 
     def test_late_commit_result_updates_history_but_not_a_newer_caption(self) -> None:
         canvas_updates: list[dict] = []
         history_updates: list[tuple[int, str]] = []
+        job = TranslationJob("commit", 4, "old sentence", 1)
         app = SimpleNamespace(
-            translation_jobs={1: TranslationJob("commit", 4, "old sentence", 1)},
             display_generation=2,
             display_kind="preview",
             history=SimpleNamespace(
@@ -363,7 +361,7 @@ class TranslationTests(unittest.TestCase):
             ),
         )
 
-        CaptionApplication._translation_result(app, 1, "old translation")
+        CaptionApplication._translation_result(app, 1, job, "old translation")
 
         self.assertEqual(history_updates, [(4, "old translation")])
         self.assertEqual(canvas_updates, [])
@@ -374,7 +372,7 @@ class TranslationTests(unittest.TestCase):
             segmenter=SimpleNamespace(active="still speaking"),
             display_generation=0,
             display_kind="preview",
-            translation_jobs={},
+            translation_session=SimpleNamespace(has_job=lambda generation: False),
             _restart_clear_timer=lambda: events.append("deferred"),
             overlay=SimpleNamespace(
                 canvas=SimpleNamespace(clear=lambda: events.append("cleared"))
@@ -386,11 +384,64 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(events, ["deferred"])
 
 
+class TranslationSessionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.qt_app = QApplication.instance() or QApplication([])
+
+    def test_preview_scheduling_uses_segmentation_settings(self) -> None:
+        session = TranslationSession()
+        config = AppConfig()
+        config.segmentation.preview_min_chars = 4
+        calls: list[tuple[str, bool]] = []
+
+        def translate(text, history, translation, *, preview=False):
+            calls.append((text, preview))
+            return 1
+
+        session.translator.translate = translate
+        session.schedule_preview(
+            "test",
+            [],
+            config.translation,
+            config.segmentation,
+            cue_id=7,
+        )
+
+        self.assertEqual(calls, [("test", True)])
+        self.assertEqual(session.jobs[1], TranslationJob("preview", None, "test", 7))
+        session.close()
+
+    def test_commit_discards_preview_state_without_changing_text(self) -> None:
+        session = TranslationSession()
+        config = AppConfig()
+        session.translator.translate = lambda *args, **kwargs: 2
+        session.translator.cancel_pending = lambda: None
+        session.jobs[1] = TranslationJob("preview", None, "unchanged", 3)
+        discarded: list[bool] = []
+        session.previews_discarded.connect(lambda: discarded.append(True))
+
+        generation = session.request_commit(
+            "unchanged",
+            [],
+            config.translation,
+            record_id=9,
+            cue_id=3,
+        )
+
+        self.assertEqual(generation, 2)
+        self.assertNotIn(1, session.jobs)
+        self.assertEqual(session.jobs[2], TranslationJob("commit", 9, "unchanged", 3))
+        self.assertEqual(discarded, [True])
+        session.close()
+
+
 class CaptureLifecycleTests(unittest.TestCase):
     def test_pause_keeps_the_worker_and_loaded_model_alive(self) -> None:
         events: list[str] = []
         app = SimpleNamespace(
-            asr_worker=SimpleNamespace(
+            capture_session=SimpleNamespace(
+                running=True,
                 pause=lambda: events.append("paused"),
                 stop=lambda: events.append("stopped"),
             ),
@@ -421,8 +472,10 @@ class CaptureLifecycleTests(unittest.TestCase):
     def test_resume_reuses_the_existing_worker(self) -> None:
         events: list[str] = []
         app = SimpleNamespace(
-            asr_thread=object(),
-            asr_worker=SimpleNamespace(resume=lambda: events.append("resumed")),
+            capture_session=SimpleNamespace(
+                running=True,
+                resume=lambda: events.append("resumed"),
+            ),
             capture_paused=True,
             capturing=False,
             overlay=SimpleNamespace(
