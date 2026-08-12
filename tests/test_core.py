@@ -735,14 +735,14 @@ class CaptionCanvasTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(all(line.kind == "source" for line in lines))
 
-    def test_caption_size_setting_is_measured_in_pixels(self) -> None:
+    def test_caption_size_setting_is_measured_in_points(self) -> None:
         style = AppConfig().subtitle
         style.source_size = 30
         style.translation_size = 32
         canvas = CaptionCanvas(style)
 
-        self.assertEqual(canvas._font("source").pixelSize(), 30)
-        self.assertEqual(canvas._font("translation").pixelSize(), 32)
+        self.assertEqual(canvas._font("source").pointSize(), 30)
+        self.assertEqual(canvas._font("translation").pointSize(), 32)
 
 
 class SettingsDialogTests(unittest.TestCase):

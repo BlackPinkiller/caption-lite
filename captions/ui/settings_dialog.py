@@ -503,7 +503,7 @@ class SettingsDialog(QDialog):
         self.translation_size = WheelSafeSpinBox()
         for control in (self.source_size, self.translation_size):
             control.setRange(14, 72)
-            control.setSuffix(" px")
+            control.setSuffix(" pt")
         typography_form.addRow("识别文字号", self.source_size)
         typography_form.addRow("翻译文字号", self.translation_size)
         self.weight = WheelSafeSpinBox()

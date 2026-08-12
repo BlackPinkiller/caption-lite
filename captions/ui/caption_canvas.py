@@ -101,11 +101,10 @@ class CaptionCanvas(QWidget):
         self.update()
 
     def _font(self, kind: str) -> QFont:
-        pixel_size = (
+        point_size = (
             self.style.source_size if kind == "source" else self.style.translation_size
         )
-        font = QFont(self.style.font_family)
-        font.setPixelSize(pixel_size)
+        font = QFont(self.style.font_family, point_size)
         font.setWeight(QFont.Weight(max(100, min(900, self.style.font_weight))))
         return font
 
