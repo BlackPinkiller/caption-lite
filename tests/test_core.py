@@ -39,6 +39,8 @@ from captions.config import (
     MULTILINGUAL_MODEL_NAME,
     NEMOTRON_MULTILINGUAL_LANGUAGES,
     MODEL_CATALOG,
+    SUBTITLE_THEME_PRESETS,
+    apply_subtitle_theme,
     apply_model_preset,
     default_model_dir,
     load_config,
@@ -46,6 +48,7 @@ from captions.config import (
     model_download_spec,
     model_is_complete,
     save_config,
+    subtitle_style_values,
 )
 from captions.model_download import ModelDownloadWorker
 from captions.segmenter import Segmenter
@@ -1149,6 +1152,47 @@ class CaptionCanvasTests(unittest.TestCase):
         self.assertGreater(line, none + 1000)
         self.assertGreater(block, line + 1000)
 
+    def test_line_spacing_changes_the_real_gap_between_line_backgrounds(self) -> None:
+        def largest_background_gap(spacing: int) -> int:
+            style = AppConfig().subtitle
+            style.mode = "source"
+            style.background = "line"
+            style.background_color = "rgba(0,0,0,1)"
+            style.background_radius = 0
+            style.line_spacing = spacing
+            style.shadow = False
+            style.outline_width = 0
+            canvas = CaptionCanvas(style, preview=True)
+            canvas.resize(640, 220)
+            canvas.set_cue(1, "First line", "")
+            canvas.set_cue(2, "Second line", "")
+            canvas.show()
+            self.qt_app.processEvents()
+            image = canvas.grab().toImage()
+            canvas.close()
+            dark_rows = [
+                y
+                for y in range(image.height())
+                if sum(
+                    image.pixelColor(x, y).lightness() < 40
+                    for x in range(image.width())
+                )
+                > 40
+            ]
+            groups: list[list[int]] = []
+            for row in dark_rows:
+                if not groups or row > groups[-1][-1] + 1:
+                    groups.append([row])
+                else:
+                    groups[-1].append(row)
+            return max(
+                (right[0] - left[-1] - 1 for left, right in zip(groups, groups[1:])),
+                default=0,
+            )
+
+        self.assertEqual(largest_background_gap(0), 0)
+        self.assertGreaterEqual(largest_background_gap(14), 12)
+
     def test_natural_wrapping_never_drops_half_of_a_bilingual_sentence(self) -> None:
         style = AppConfig().subtitle
         style.mode = "bilingual"
@@ -1176,6 +1220,41 @@ class CaptionCanvasTests(unittest.TestCase):
 
         self.assertEqual(canvas._font("source").pixelSize(), 30)
         self.assertEqual(canvas._font("translation").pixelSize(), 32)
+        self.assertEqual(canvas._font("source").weight(), 600)
+
+    def test_background_vertical_padding_expands_line_and_block_backgrounds(self) -> None:
+        def dark_band_height(vertical_padding: int, background: str) -> int:
+            style = AppConfig().subtitle
+            style.mode = "source"
+            style.background = background
+            style.background_color = "rgba(0,0,0,1)"
+            style.background_radius = 0
+            style.background_padding_y = vertical_padding
+            style.shadow = False
+            style.outline_width = 0
+            canvas = CaptionCanvas(style, preview=True)
+            canvas.resize(640, 220)
+            canvas.set_cue(1, "Background size", "")
+            canvas.show()
+            self.qt_app.processEvents()
+            image = canvas.grab().toImage()
+            canvas.close()
+            dark_rows = [
+                y
+                for y in range(image.height())
+                if sum(
+                    image.pixelColor(x, y).lightness() < 40
+                    for x in range(image.width())
+                )
+                > 40
+            ]
+            return dark_rows[-1] - dark_rows[0] + 1
+
+        for background in ("line", "block"):
+            self.assertGreaterEqual(
+                dark_band_height(8, background),
+                dark_band_height(0, background) + 16,
+            )
 
 
 class SettingsDialogTests(unittest.TestCase):
@@ -1215,6 +1294,7 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertFalse(dialog.asr_language.isEnabled())
         self.assertTrue(dialog.recognition_advanced.body.isHidden())
         self.assertTrue(dialog.translation_advanced.body.isHidden())
+        self.assertTrue(dialog.appearance_advanced.body.isHidden())
         self.assertEqual(dialog.asr_threads.currentData(), 2)
         self.assertEqual(
             [
@@ -1232,6 +1312,7 @@ class SettingsDialogTests(unittest.TestCase):
         for section in (
             dialog.recognition_advanced,
             dialog.translation_advanced,
+            dialog.appearance_advanced,
         ):
             self.assertFalse(section.toggle.isCheckable())
             QTest.mouseClick(section.toggle, Qt.MouseButton.LeftButton)
@@ -1303,7 +1384,87 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertEqual(dialog.outline_width.maximum(), 1.0)
         self.assertEqual(dialog.outline_width.singleStep(), 0.1)
         self.assertEqual(dialog.outline_width.decimals(), 1)
-        self.assertEqual(dialog.outline_width.value(), 0.1)
+        self.assertEqual(dialog.outline_width.value(), 0.4)
+        dialog.close()
+
+    def test_appearance_theme_picker_has_three_presets_and_custom(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        self.assertEqual(
+            [
+                dialog.appearance_theme.itemData(index)
+                for index in range(dialog.appearance_theme.count())
+            ],
+            [*SUBTITLE_THEME_PRESETS, "custom"],
+        )
+        self.assertEqual(dialog.appearance_theme.itemText(1), "电视字幕")
+        self.assertFalse(hasattr(dialog, "weight"))
+        self.assertEqual(dialog.background_padding_y.minimum(), 0)
+        self.assertEqual(dialog.background_padding_y.maximum(), 24)
+        dialog.close()
+
+    def test_television_theme_is_left_aligned_yellow_and_visual_only(self) -> None:
+        config = AppConfig()
+        config.subtitle.mode = "translation"
+        config.subtitle.max_sentences = 4
+        config.subtitle.stay_ms = 7300
+        dialog = SettingsDialog(config)
+
+        dialog.appearance_theme.setCurrentIndex(
+            dialog.appearance_theme.findData("television")
+        )
+        values = dialog.values().subtitle
+
+        self.assertEqual(values.theme, "television")
+        self.assertEqual(values.align, "left")
+        self.assertEqual(values.text_color.lower(), "#ffd84d")
+        self.assertEqual(values.source_size, 15)
+        self.assertEqual(values.translation_size, 20)
+        self.assertEqual(values.background, "line")
+        self.assertEqual(values.background_color, "rgba(0,0,0,0.9)")
+        self.assertEqual(values.line_spacing, 2)
+        self.assertEqual(values.background_radius, 4)
+        self.assertEqual(values.background_padding_y, 2)
+        self.assertFalse(values.shadow)
+        self.assertEqual(values.outline_width, 0.0)
+        self.assertEqual(values.mode, "translation")
+        self.assertEqual(values.max_sentences, 4)
+        self.assertEqual(values.stay_ms, 7300)
+        dialog.close()
+
+    def test_editing_a_preset_switches_to_the_saved_custom_slot(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        dialog.background_radius.setValue(17)
+        values = dialog.values().subtitle
+
+        self.assertEqual(dialog.appearance_theme.currentData(), "custom")
+        self.assertEqual(values.theme, "custom")
+        self.assertEqual(values.background_radius, 17)
+        self.assertEqual(values.custom_style["background_radius"], 17)
+        dialog.close()
+
+    def test_switching_presets_preserves_and_restores_the_custom_slot(self) -> None:
+        config = AppConfig()
+        config.subtitle.theme = "custom"
+        config.subtitle.text_color = "#eb4d4b"
+        config.subtitle.background_radius = 19
+        config.subtitle.custom_style = subtitle_style_values(config.subtitle)
+        dialog = SettingsDialog(config)
+
+        dialog.appearance_theme.setCurrentIndex(
+            dialog.appearance_theme.findData("soft")
+        )
+        preset_values = dialog.values().subtitle
+        self.assertEqual(preset_values.theme, "soft")
+        self.assertEqual(preset_values.custom_style["text_color"], "#eb4d4b")
+
+        dialog.appearance_theme.setCurrentIndex(
+            dialog.appearance_theme.findData("custom")
+        )
+        custom_values = dialog.values().subtitle
+        self.assertEqual(custom_values.text_color, "#eb4d4b")
+        self.assertEqual(custom_values.background_radius, 19)
         dialog.close()
 
     def test_multilingual_selection_uses_its_default_directory(self) -> None:
@@ -1380,7 +1541,6 @@ class SettingsDialogTests(unittest.TestCase):
         config.subtitle.font_family = self.qt_app.font().family()
         config.subtitle.source_size = 21
         config.subtitle.translation_size = 23
-        config.subtitle.font_weight = 700
         config.subtitle.text_color = "#ffeecc"
         config.subtitle.outline_color = "#112233"
         config.subtitle.outline_width = 0.7
@@ -1388,7 +1548,12 @@ class SettingsDialogTests(unittest.TestCase):
         config.subtitle.align = "right"
         config.subtitle.background = "block"
         config.subtitle.background_color = "rgba(1,2,3,0.7)"
+        config.subtitle.background_radius = 13
+        config.subtitle.background_padding_y = 9
         config.subtitle.padding = 19
+        config.subtitle.line_spacing = 11
+        config.subtitle.old_opacity = 0.57
+        config.subtitle.preview_opacity = 0.91
         config.subtitle.stay_ms = 7400
         dialog = SettingsDialog(config)
 
@@ -1396,9 +1561,11 @@ class SettingsDialogTests(unittest.TestCase):
 
         for name in (
             "mode", "max_sentences", "font_family", "source_size",
-            "translation_size", "font_weight", "text_color", "outline_color",
+            "translation_size", "text_color", "outline_color",
             "outline_width", "shadow", "align", "background",
-            "background_color", "padding", "stay_ms",
+            "background_color", "background_radius", "background_padding_y",
+            "padding", "line_spacing",
+            "old_opacity", "preview_opacity", "stay_ms",
         ):
             self.assertEqual(getattr(values, name), getattr(config.subtitle, name))
         dialog.close()
@@ -1685,6 +1852,78 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(loaded.subtitle.outline_width, 1.0)
 
+    def test_legacy_visual_settings_migrate_to_the_custom_theme(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"text_color":"#ffe66d","align":"left"}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.theme, "custom")
+        self.assertEqual(loaded.subtitle.text_color, "#ffe66d")
+        self.assertEqual(loaded.subtitle.custom_style["align"], "left")
+
+    def test_legacy_line_height_migrates_to_pixel_line_spacing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"line_height":1.25}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.theme, "custom")
+        self.assertEqual(loaded.subtitle.line_spacing, 4)
+
+    def test_theme_and_corner_radius_are_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"theme":"unknown","background_radius":99}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.theme, "clear")
+        self.assertEqual(loaded.subtitle.background_radius, 6)
+
+    def test_custom_theme_round_trips_separately_from_built_in_presets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = AppConfig()
+            config.subtitle.theme = "custom"
+            config.subtitle.background_radius = 21
+            config.subtitle.text_color = "#c7f9cc"
+            config.subtitle.custom_style = subtitle_style_values(config.subtitle)
+
+            save_config(config, path)
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.subtitle.theme, "custom")
+        self.assertEqual(loaded.subtitle.background_radius, 21)
+        self.assertEqual(loaded.subtitle.custom_style["text_color"], "#c7f9cc")
+
+    def test_built_in_theme_values_are_immutable_when_loading_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"theme":"television","align":"right",'
+                '"text_color":"#ffffff"}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        expected = AppConfig().subtitle
+        apply_subtitle_theme(expected, "television")
+        self.assertEqual(loaded.subtitle.align, expected.align)
+        self.assertEqual(loaded.subtitle.text_color, expected.text_color)
+
     def test_new_features_keep_existing_defaults(self) -> None:
         config = AppConfig()
         self.assertEqual(config.asr.model_variant, "english")
@@ -1697,6 +1936,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.translation.backend, "llama")
         self.assertEqual(config.translation.source_lang, "EN")
         self.assertEqual(config.translation.target_lang, "ZH-HANS")
+        self.assertEqual(config.subtitle.theme, "clear")
+        self.assertEqual(config.subtitle.source_size, 18)
+        self.assertEqual(config.subtitle.translation_size, 22)
+        self.assertEqual(config.subtitle.background_radius, 6)
         name, _ = model_download_spec(config)
         self.assertNotEqual(name, MULTILINGUAL_MODEL_NAME)
 
@@ -1712,6 +1955,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.translation.deepl_api_plan, "free")
         self.assertEqual(loaded.translation.source_lang, "EN")
         self.assertEqual(loaded.translation.target_lang, "ZH-HANS")
+        self.assertEqual(loaded.subtitle.theme, "clear")
+        self.assertEqual(loaded.subtitle.background_radius, 6)
 
     def test_legacy_deepl_target_language_migrates_to_shared_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

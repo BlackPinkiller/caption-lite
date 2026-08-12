@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
@@ -35,11 +35,15 @@ from PySide6.QtWidgets import (
 from captions.config import (
     AppConfig,
     MODEL_CATALOG,
+    SUBTITLE_THEME_PRESETS,
     SubtitleConfig,
     apply_model_preset,
+    apply_subtitle_theme,
     clone_config,
     default_model_dir,
     model_is_complete,
+    subtitle_custom_style,
+    subtitle_style_values,
 )
 from captions.ui.caption_canvas import CaptionCanvas
 
@@ -200,6 +204,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.config = clone_config(config)
         self._loading = False
+        self._applying_theme = False
+        self._draft_custom_style = subtitle_custom_style(config.subtitle)
         self.setWindowTitle("实时字幕设置")
         self.resize(680, 620)
         layout = QVBoxLayout(self)
@@ -486,6 +492,16 @@ class SettingsDialog(QDialog):
     def _build_appearance(self) -> None:
         page = QWidget()
         page_layout = QVBoxLayout(page)
+
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("主题"))
+        self.appearance_theme = WheelSafeComboBox()
+        for theme, preset in SUBTITLE_THEME_PRESETS.items():
+            self.appearance_theme.addItem(preset["label"], theme)
+        self.appearance_theme.addItem("自定义", "custom")
+        theme_row.addWidget(self.appearance_theme, 1)
+        page_layout.addLayout(theme_row)
+
         self.style_preview = CaptionCanvas(self.config.subtitle, preview=True)
         self.style_preview.setMinimumHeight(190)
         self.style_preview.set_content(
@@ -506,29 +522,37 @@ class SettingsDialog(QDialog):
         page_layout.addWidget(self.style_preview)
         preview_hint = QLabel("预览会按当前窗口宽度实际换行；保存后立即应用到字幕。")
         preview_hint.setStyleSheet("color:#777")
-        preview_row = QHBoxLayout()
-        preview_row.addWidget(preview_hint, 1)
-        reset_appearance = QPushButton("恢复推荐外观")
-        reset_appearance.clicked.connect(self._restore_default_appearance)
-        preview_row.addWidget(reset_appearance)
-        page_layout.addLayout(preview_row)
+        page_layout.addWidget(preview_hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
-        typography_group = QGroupBox("内容与排版")
-        typography_form = QFormLayout(typography_group)
+        content_group = QGroupBox("内容与布局")
+        content_form = QFormLayout(content_group)
         self.mode = WheelSafeComboBox()
         self.mode.addItem("识别文本 + 翻译文本", "bilingual")
         self.mode.addItem("仅识别文本", "source")
         self.mode.addItem("仅翻译文本", "translation")
-        typography_form.addRow("显示内容", self.mode)
+        content_form.addRow("显示内容", self.mode)
         self.max_sentences = WheelSafeSpinBox()
         self.max_sentences.setRange(1, 6)
         self.max_sentences.setSuffix(" 句")
-        typography_form.addRow("最大句数", self.max_sentences)
+        content_form.addRow("最大句数", self.max_sentences)
+        self.align = WheelSafeComboBox()
+        self.align.addItem("居中", "center")
+        self.align.addItem("左对齐", "left")
+        self.align.addItem("右对齐", "right")
+        content_form.addRow("对齐", self.align)
+        self.stay = WheelSafeSpinBox()
+        self.stay.setRange(0, 60000)
+        self.stay.setSuffix(" ms")
+        content_form.addRow("字幕停留", self.stay)
+        controls_layout.addWidget(content_group)
+
+        typography_group = QGroupBox("文字")
+        typography_form = QFormLayout(typography_group)
         self.font = WheelSafeFontComboBox()
         typography_form.addRow("字体", self.font)
         self.source_size = WheelSafeSpinBox()
@@ -538,22 +562,17 @@ class SettingsDialog(QDialog):
             control.setSuffix(" px")
         typography_form.addRow("识别文字号", self.source_size)
         typography_form.addRow("翻译文字号", self.translation_size)
-        self.weight = WheelSafeSpinBox()
-        self.weight.setRange(100, 900)
-        self.weight.setSingleStep(100)
-        typography_form.addRow("字重", self.weight)
-        self.align = WheelSafeComboBox()
-        self.align.addItem("居中", "center")
-        self.align.addItem("左对齐", "left")
-        self.align.addItem("右对齐", "right")
-        typography_form.addRow("对齐", self.align)
+        self.text_color = ColorButton()
+        typography_form.addRow("文字颜色", self.text_color)
+        self.line_spacing = WheelSafeSpinBox()
+        self.line_spacing.setRange(0, 32)
+        self.line_spacing.setSuffix(" px")
+        typography_form.addRow("行间距", self.line_spacing)
         controls_layout.addWidget(typography_group)
 
-        readability_group = QGroupBox("背景与可读性")
+        readability_group = QGroupBox("背景与效果")
         readability_form = QFormLayout(readability_group)
-        self.text_color = ColorButton()
         self.outline_color = ColorButton()
-        readability_form.addRow("文字颜色", self.text_color)
         readability_form.addRow("描边颜色", self.outline_color)
         self.outline_width = WheelSafeDoubleSpinBox()
         self.outline_width.setRange(0, 1)
@@ -570,47 +589,69 @@ class SettingsDialog(QDialog):
         self.background_color = QLineEdit()
         self.background_color.setPlaceholderText("rgba(0,0,0,0.62)")
         readability_form.addRow("背景颜色", self.background_color)
+        self.background_radius = WheelSafeSpinBox()
+        self.background_radius.setRange(0, 24)
+        self.background_radius.setSuffix(" px")
+        readability_form.addRow("背景圆角", self.background_radius)
+        self.background_padding_y = WheelSafeSpinBox()
+        self.background_padding_y.setRange(0, 24)
+        self.background_padding_y.setSuffix(" px")
+        readability_form.addRow("背景上下留白", self.background_padding_y)
         self.padding = WheelSafeSpinBox()
         self.padding.setRange(0, 48)
-        readability_form.addRow("内边距", self.padding)
+        self.padding.setSuffix(" px")
+        readability_form.addRow("窗口边距", self.padding)
         controls_layout.addWidget(readability_group)
 
-        timing_group = QGroupBox("显示时序")
-        timing_form = QFormLayout(timing_group)
-        self.stay = WheelSafeSpinBox()
-        self.stay.setRange(0, 60000)
-        self.stay.setSuffix(" ms")
-        timing_form.addRow("字幕停留", self.stay)
-        controls_layout.addWidget(timing_group)
+        self.appearance_advanced = ExpandableSection("字幕层级")
+        hierarchy_group = QGroupBox()
+        hierarchy_form = QFormLayout(hierarchy_group)
+        self.preview_opacity = WheelSafeSpinBox()
+        self.preview_opacity.setRange(0, 100)
+        self.preview_opacity.setSuffix(" %")
+        hierarchy_form.addRow("当前字幕", self.preview_opacity)
+        self.old_opacity = WheelSafeSpinBox()
+        self.old_opacity.setRange(0, 100)
+        self.old_opacity.setSuffix(" %")
+        hierarchy_form.addRow("历史字幕", self.old_opacity)
+        self.appearance_advanced.addWidget(hierarchy_group)
+        controls_layout.addWidget(self.appearance_advanced)
         controls_layout.addStretch(1)
         scroll.setWidget(controls)
         page_layout.addWidget(scroll, 1)
         self.tabs.addTab(page, "外观")
+        self.appearance_theme.currentIndexChanged.connect(self._theme_changed)
         for control in (
-            self.mode,
-            self.max_sentences,
             self.font,
             self.source_size,
             self.translation_size,
-            self.weight,
+            self.align,
             self.outline_width,
             self.shadow,
-            self.align,
             self.background,
             self.background_color,
+            self.background_radius,
+            self.background_padding_y,
             self.padding,
-            self.stay,
+            self.line_spacing,
+            self.preview_opacity,
+            self.old_opacity,
         ):
             if isinstance(control, QLineEdit):
-                control.textChanged.connect(self._update_style_preview)
+                control.textChanged.connect(self._appearance_value_changed)
             elif isinstance(control, QCheckBox):
-                control.toggled.connect(self._update_style_preview)
+                control.toggled.connect(self._appearance_value_changed)
             elif isinstance(control, QComboBox):
+                control.currentIndexChanged.connect(self._appearance_value_changed)
+            else:
+                control.valueChanged.connect(self._appearance_value_changed)
+        for control in (self.mode, self.max_sentences, self.stay):
+            if isinstance(control, QComboBox):
                 control.currentIndexChanged.connect(self._update_style_preview)
             else:
                 control.valueChanged.connect(self._update_style_preview)
-        self.text_color.color_changed.connect(self._update_style_preview)
-        self.outline_color.color_changed.connect(self._update_style_preview)
+        self.text_color.color_changed.connect(self._appearance_value_changed)
+        self.outline_color.color_changed.connect(self._appearance_value_changed)
 
     def _build_glossary(self) -> None:
         page = QWidget()
@@ -623,9 +664,28 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.glossary)
         self.tabs.addTab(page, "术语表")
 
+    def _set_style_controls(self, style: SubtitleConfig) -> None:
+        self.font.setCurrentFont(QFont(style.font_family))
+        self.source_size.setValue(style.source_size)
+        self.translation_size.setValue(style.translation_size)
+        self.text_color.set_color(style.text_color)
+        self.outline_color.set_color(style.outline_color)
+        self.outline_width.setValue(style.outline_width)
+        self.shadow.setChecked(style.shadow)
+        self._select(self.align, style.align)
+        self._select(self.background, style.background)
+        self.background_color.setText(style.background_color)
+        self.background_radius.setValue(style.background_radius)
+        self.background_padding_y.setValue(style.background_padding_y)
+        self.padding.setValue(style.padding)
+        self.line_spacing.setValue(style.line_spacing)
+        self.preview_opacity.setValue(round(style.preview_opacity * 100))
+        self.old_opacity.setValue(round(style.old_opacity * 100))
+
     def load(self, config: AppConfig) -> None:
         self._loading = True
         self.config = clone_config(config)
+        self._draft_custom_style = subtitle_custom_style(config.subtitle)
         self._select(self.model_variant, config.asr.model_variant)
         self.model_dir.setText(config.asr.model_dir)
         self._populate_asr_languages(
@@ -656,18 +716,17 @@ class SettingsDialog(QDialog):
         self.preference.setPlainText(config.translation.preference)
         self._select(self.mode, config.subtitle.mode)
         self.max_sentences.setValue(config.subtitle.max_sentences)
-        self.font.setCurrentFont(QFont(config.subtitle.font_family))
-        self.source_size.setValue(config.subtitle.source_size)
-        self.translation_size.setValue(config.subtitle.translation_size)
-        self.weight.setValue(config.subtitle.font_weight)
-        self.text_color.set_color(config.subtitle.text_color)
-        self.outline_color.set_color(config.subtitle.outline_color)
-        self.outline_width.setValue(config.subtitle.outline_width)
-        self.shadow.setChecked(config.subtitle.shadow)
-        self._select(self.align, config.subtitle.align)
-        self._select(self.background, config.subtitle.background)
-        self.background_color.setText(config.subtitle.background_color)
-        self.padding.setValue(config.subtitle.padding)
+        appearance_theme = config.subtitle.theme
+        if appearance_theme in SUBTITLE_THEME_PRESETS:
+            preset_style = SubtitleConfig()
+            apply_subtitle_theme(preset_style, appearance_theme)
+            if subtitle_style_values(preset_style) != subtitle_style_values(
+                config.subtitle
+            ):
+                appearance_theme = "custom"
+                self._draft_custom_style = subtitle_style_values(config.subtitle)
+        self._select(self.appearance_theme, appearance_theme)
+        self._set_style_controls(config.subtitle)
         self.stay.setValue(config.subtitle.stay_ms)
         self.glossary.setPlainText(
             "\n".join(f"{source} = {target}" for source, target in config.translation.glossary.items())
@@ -757,10 +816,10 @@ class SettingsDialog(QDialog):
         config.translation.glossary = terms
         config.subtitle.mode = self.mode.currentData()
         config.subtitle.max_sentences = self.max_sentences.value()
+        config.subtitle.theme = self.appearance_theme.currentData()
         config.subtitle.font_family = self.font.currentFont().family()
         config.subtitle.source_size = self.source_size.value()
         config.subtitle.translation_size = self.translation_size.value()
-        config.subtitle.font_weight = self.weight.value()
         config.subtitle.text_color = self.text_color.value
         config.subtitle.outline_color = self.outline_color.value
         config.subtitle.outline_width = self.outline_width.value()
@@ -768,7 +827,16 @@ class SettingsDialog(QDialog):
         config.subtitle.align = self.align.currentData()
         config.subtitle.background = self.background.currentData()
         config.subtitle.background_color = self.background_color.text().strip()
+        config.subtitle.background_radius = self.background_radius.value()
+        config.subtitle.background_padding_y = self.background_padding_y.value()
         config.subtitle.padding = self.padding.value()
+        config.subtitle.line_spacing = self.line_spacing.value()
+        config.subtitle.preview_opacity = self.preview_opacity.value() / 100
+        config.subtitle.old_opacity = self.old_opacity.value() / 100
+        if config.subtitle.theme == "custom":
+            config.subtitle.custom_style = subtitle_style_values(config.subtitle)
+        else:
+            config.subtitle.custom_style = self._draft_custom_style.copy()
         config.subtitle.stay_ms = self.stay.value()
         return config
 
@@ -782,24 +850,30 @@ class SettingsDialog(QDialog):
         config = self.values()
         self.style_preview.set_style(config.subtitle)
 
-    def _restore_default_appearance(self) -> None:
-        defaults = SubtitleConfig()
-        self._select(self.mode, defaults.mode)
-        self.max_sentences.setValue(defaults.max_sentences)
-        self.font.setCurrentFont(QFont(defaults.font_family))
-        self.source_size.setValue(defaults.source_size)
-        self.translation_size.setValue(defaults.translation_size)
-        self.weight.setValue(defaults.font_weight)
-        self.text_color.set_color(defaults.text_color)
-        self.outline_color.set_color(defaults.outline_color)
-        self.outline_width.setValue(defaults.outline_width)
-        self.shadow.setChecked(defaults.shadow)
-        self._select(self.align, defaults.align)
-        self._select(self.background, defaults.background)
-        self.background_color.setText(defaults.background_color)
-        self.padding.setValue(defaults.padding)
-        self.stay.setValue(defaults.stay_ms)
+    def _theme_changed(self, *args) -> None:
+        if self._loading or self._applying_theme:
+            return
+        style = clone_config(self.config).subtitle
+        style.custom_style = self._draft_custom_style
+        apply_subtitle_theme(style, self.appearance_theme.currentData())
+        self._applying_theme = True
+        try:
+            self._set_style_controls(style)
+        finally:
+            self._applying_theme = False
         self._update_style_preview()
+
+    def _appearance_value_changed(self, *args) -> None:
+        if self._loading or self._applying_theme:
+            return
+        if self.appearance_theme.currentData() != "custom":
+            index = self.appearance_theme.findData("custom")
+            blocker = QSignalBlocker(self.appearance_theme)
+            self.appearance_theme.setCurrentIndex(index)
+            del blocker
+        config = self.values()
+        self._draft_custom_style = subtitle_style_values(config.subtitle)
+        self.style_preview.set_style(config.subtitle)
 
     def _model_variant_changed(self, *args) -> None:
         model_variant = self.model_variant.currentData()

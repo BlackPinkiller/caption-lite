@@ -119,7 +119,7 @@ class CaptionCanvas(QWidget):
         )
         font = QFont(self.style.font_family)
         font.setPixelSize(pixel_size)
-        font.setWeight(QFont.Weight(max(100, min(900, self.style.font_weight))))
+        font.setWeight(QFont.Weight(600))
         return font
 
     @staticmethod
@@ -190,16 +190,28 @@ class CaptionCanvas(QWidget):
         if not lines:
             return
         layouts: list[tuple[CaptionLine, QFont, str, float, float]] = []
-        total_height = 0.0
+        line_background_padding_y = (
+            float(self.style.background_padding_y)
+            if self.style.background == "line"
+            else 0.0
+        )
+        block_background_padding_y = (
+            float(self.style.background_padding_y)
+            if self.style.background == "block"
+            else 0.0
+        )
         for line in lines:
             font = self._font(line.kind)
             metrics = QFontMetricsF(font)
             text = line.text
             width = min(available, metrics.horizontalAdvance(text))
-            height = metrics.height() * self.style.line_height
+            height = metrics.height() + line_background_padding_y * 2
             layouts.append((line, font, text, width, height))
-            total_height += height
-        y = self.height() - padding - total_height
+        spacing = float(self.style.line_spacing)
+        total_height = sum(layout[4] for layout in layouts)
+        total_height += spacing * max(0, len(layouts) - 1)
+        total_height += block_background_padding_y * 2
+        y = self.height() - padding - total_height + block_background_padding_y
         block_bounds: QRectF | None = None
         background = parse_color(self.style.background_color)
         text_color = parse_color(self.style.text_color)
@@ -213,22 +225,33 @@ class CaptionCanvas(QWidget):
             else:
                 x = (self.width() - width) / 2
             metrics = QFontMetricsF(font)
-            baseline = y + (height - metrics.height()) / 2 + metrics.ascent()
-            bounds = QRectF(x - 8, y + 1, width + 16, height - 2)
+            baseline = y + line_background_padding_y + metrics.ascent()
+            bounds = QRectF(x - 8, y, width + 16, height)
             block_bounds = bounds if block_bounds is None else block_bounds.united(bounds)
             positioned.append((line, font, text, x, baseline, bounds))
-            y += height
+            y += height + spacing
         if self.style.background == "block" and block_bounds is not None:
             painter.setOpacity(1.0)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(background)
-            painter.drawRoundedRect(block_bounds.adjusted(-3, -4, 3, 4), 8, 8)
+            radius = float(self.style.background_radius)
+            painter.drawRoundedRect(
+                block_bounds.adjusted(
+                    -3,
+                    -block_background_padding_y,
+                    3,
+                    block_background_padding_y,
+                ),
+                radius,
+                radius,
+            )
         for line, font, text, x, baseline, bounds in positioned:
             if self.style.background == "line":
                 painter.setOpacity(line.opacity)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(background)
-                painter.drawRoundedRect(bounds, 6, 6)
+                radius = float(self.style.background_radius)
+                painter.drawRoundedRect(bounds, radius, radius)
             path = QPainterPath()
             path.addText(QPointF(x, baseline), font, text)
             painter.setOpacity(line.opacity)
