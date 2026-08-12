@@ -633,6 +633,8 @@ class SettingsDialog(QDialog):
         self.max_sentences.setRange(1, 6)
         self.max_sentences.setSuffix(" 句")
         content_form.addRow("最大句数", self.max_sentences)
+        self.mode.currentIndexChanged.connect(self._update_sentence_minimum)
+        self._update_sentence_minimum()
         self.align = WheelSafeComboBox()
         self.align.addItem("居中", "center")
         self.align.addItem("左对齐", "left")
@@ -774,6 +776,10 @@ class SettingsDialog(QDialog):
         self.line_spacing.setValue(style.line_spacing)
         self.preview_opacity.setValue(round(style.preview_opacity * 100))
         self.old_opacity.setValue(round(style.old_opacity * 100))
+
+    def _update_sentence_minimum(self, *args) -> None:
+        minimum = 2 if self.mode.currentData() == "bilingual" else 1
+        self.max_sentences.setMinimum(minimum)
 
     def load(self, config: AppConfig) -> None:
         self._loading = True

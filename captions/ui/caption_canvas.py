@@ -152,21 +152,67 @@ class CaptionCanvas(QWidget):
 
     def _visible_lines(self, available: float) -> list[CaptionLine]:
         mode = self.style.mode
-        limit = max(1, min(6, self.style.max_sentences))
+        minimum = 2 if mode == "bilingual" else 1
+        limit = max(minimum, min(6, self.style.max_sentences))
         current = CaptionCue(self.cue_id, self.source, self.translation)
-        cues = [*self.previous_cues, current]
-        cues = [cue for cue in cues if cue.source or cue.translation][-limit:]
-        rows: list[tuple[str, str, float]] = []
-        for cue in cues:
-            opacity = (
-                self.style.preview_opacity
-                if cue is current
-                else self.style.old_opacity
-            )
-            if mode in {"source", "bilingual"} and cue.source:
-                rows.append((cue.source, "source", opacity))
-            if mode in {"translation", "bilingual"} and cue.translation:
-                rows.append((cue.translation, "translation", opacity))
+
+        if mode == "source":
+            rows = [
+                (cue.source, "source", self.style.old_opacity)
+                for cue in self.previous_cues
+                if cue.source
+            ]
+            if current.source:
+                rows.append((current.source, "source", self.style.preview_opacity))
+            rows = rows[-limit:]
+        elif mode == "translation":
+            rows = [
+                (cue.translation, "translation", self.style.old_opacity)
+                for cue in self.previous_cues
+                if cue.translation
+            ]
+            if current.translation:
+                rows.append(
+                    (current.translation, "translation", self.style.preview_opacity)
+                )
+            rows = rows[-limit:]
+        else:
+            current_rows: list[tuple[str, str, float]] = []
+            if current.source:
+                current_rows.append(
+                    (current.source, "source", self.style.preview_opacity)
+                )
+            if current.translation:
+                current_rows.append(
+                    (current.translation, "translation", self.style.preview_opacity)
+                )
+            remaining = max(0, limit - len(current_rows))
+            older_groups: list[list[tuple[str, str, float]]] = []
+            for cue in reversed(self.previous_cues):
+                if remaining <= 0:
+                    break
+                pair = [
+                    (cue.source, "source", self.style.old_opacity),
+                    (cue.translation, "translation", self.style.old_opacity),
+                ]
+                pair = [row for row in pair if row[0]]
+                if not pair:
+                    continue
+                if remaining == 1:
+                    older_groups.append([
+                        next(
+                            (row for row in pair if row[1] == "translation"),
+                            pair[-1],
+                        )
+                    ])
+                    remaining = 0
+                else:
+                    selected = pair[-remaining:]
+                    older_groups.append(selected)
+                    remaining -= len(selected)
+            rows = [
+                row for group in reversed(older_groups) for row in group
+            ] + current_rows
 
         visible: list[CaptionLine] = []
         for text, kind, opacity in rows:

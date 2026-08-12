@@ -537,7 +537,10 @@ def _normalize_config(config: AppConfig) -> None:
         subtitle.theme = defaults.subtitle.theme
     if subtitle.mode not in {"bilingual", "source", "translation"}:
         subtitle.mode = defaults.subtitle.mode
-    subtitle.max_sentences = int(_clamp(subtitle.max_sentences, 1, 6))
+    minimum_sentences = 2 if subtitle.mode == "bilingual" else 1
+    subtitle.max_sentences = int(
+        _clamp(subtitle.max_sentences, minimum_sentences, 6)
+    )
     _normalize_subtitle_appearance(subtitle)
     subtitle.custom_style = _normalized_subtitle_style(
         subtitle.custom_style,

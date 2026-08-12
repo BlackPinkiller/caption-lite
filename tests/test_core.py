@@ -1105,15 +1105,31 @@ class CaptionCanvasTests(unittest.TestCase):
         canvas.set_cue(3, "current en", "当前")
         return [(line.text, line.kind) for line in canvas._visible_lines(2000)]
 
-    def test_one_bilingual_sentence_keeps_the_current_pair(self) -> None:
+    def test_bilingual_limit_never_drops_the_current_pair(self) -> None:
         self.assertEqual(
             self._logical_lines(1),
             [("current en", "source"), ("当前", "translation")],
         )
 
-    def test_two_bilingual_sentences_keep_both_complete_pairs(self) -> None:
+    def test_two_bilingual_sentences_show_the_current_pair(self) -> None:
         self.assertEqual(
             self._logical_lines(2),
+            [("current en", "source"), ("当前", "translation")],
+        )
+
+    def test_three_bilingual_sentences_add_the_previous_translation(self) -> None:
+        self.assertEqual(
+            self._logical_lines(3),
+            [
+                ("旧二", "translation"),
+                ("current en", "source"),
+                ("当前", "translation"),
+            ],
+        )
+
+    def test_four_bilingual_sentences_add_the_previous_pair(self) -> None:
+        self.assertEqual(
+            self._logical_lines(4),
             [
                 ("previous en", "source"),
                 ("旧二", "translation"),
@@ -1122,17 +1138,17 @@ class CaptionCanvasTests(unittest.TestCase):
             ],
         )
 
-    def test_three_bilingual_sentences_keep_three_complete_pairs(self) -> None:
+    def test_single_language_mode_allows_one_sentence(self) -> None:
+        style = AppConfig().subtitle
+        style.mode = "source"
+        style.max_sentences = 1
+        canvas = CaptionCanvas(style)
+        canvas.set_cue(1, "older", "旧译文")
+        canvas.set_cue(2, "current", "当前译文")
+
         self.assertEqual(
-            self._logical_lines(3),
-            [
-                ("oldest en", "source"),
-                ("旧一", "translation"),
-                ("previous en", "source"),
-                ("旧二", "translation"),
-                ("current en", "source"),
-                ("当前", "translation"),
-            ],
+            [(line.text, line.kind) for line in canvas._visible_lines(2000)],
+            [("current", "source")],
         )
 
     def test_streaming_waits_until_the_new_text_is_longer(self) -> None:
@@ -1401,6 +1417,19 @@ class SettingsDialogTests(unittest.TestCase):
             [1, 2, 4, 8],
         )
         self.assertEqual(dialog.silence_endpoint.value(), 0.4)
+        dialog.close()
+
+    def test_sentence_minimum_follows_the_display_mode(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        self.assertEqual(dialog.mode.currentData(), "bilingual")
+        self.assertEqual(dialog.max_sentences.minimum(), 2)
+        dialog.mode.setCurrentIndex(dialog.mode.findData("source"))
+        self.assertEqual(dialog.max_sentences.minimum(), 1)
+        dialog.max_sentences.setValue(1)
+        dialog.mode.setCurrentIndex(dialog.mode.findData("bilingual"))
+        self.assertEqual(dialog.max_sentences.minimum(), 2)
+        self.assertEqual(dialog.max_sentences.value(), 2)
         dialog.close()
 
     def test_llm_provider_is_added_from_the_backend_menu_and_edited_inline(self) -> None:
@@ -1998,6 +2027,23 @@ class ConfigTests(unittest.TestCase):
             loaded, _ = load_config(path)
 
         self.assertEqual(loaded.subtitle.max_sentences, 3)
+
+    def test_sentence_limit_minimum_depends_on_display_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"subtitle":{"mode":"bilingual","max_sentences":1}}',
+                encoding="utf-8",
+            )
+            bilingual, _ = load_config(path)
+            path.write_text(
+                '{"subtitle":{"mode":"source","max_sentences":1}}',
+                encoding="utf-8",
+            )
+            source, _ = load_config(path)
+
+        self.assertEqual(bilingual.subtitle.max_sentences, 2)
+        self.assertEqual(source.subtitle.max_sentences, 1)
 
     def test_legacy_default_outline_migrates_to_the_new_thin_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
