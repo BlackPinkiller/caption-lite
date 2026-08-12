@@ -1,0 +1,70 @@
+{
+  "asr": {
+    "model_variant": "english",
+    "model_dir": "models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+    "encoder": "encoder.int8.onnx",
+    "decoder": "decoder.int8.onnx",
+    "joiner": "joiner.int8.onnx",
+    "tokens": "tokens.txt",
+    "language": "auto",
+    "auto_standby_seconds": 0
+  },
+  "translation": {
+    "backend": "llama",
+    "source_lang": "EN",
+    "target_lang": "ZH-HANS",
+    "llama_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "deepl_api_key": "",
+    "deepl_api_plan": "free",
+    "timeout_ms": 15000,
+    "stream": true,
+    "context_segments": 3,
+    "context_chars": 1200,
+    "preference": "",
+    "glossary": {
+      "Vault": "避难所",
+      "Brotherhood of Steel": "钢铁兄弟会",
+      "Sole Survivor": "唯一幸存者"
+    }
+  },
+  "segmentation": {
+    "max_chars": 160,
+    "split_lookback_chars": 32,
+    "split_lookahead_chars": 160,
+    "max_seconds": 20,
+    "preview_min_chars": 6,
+    "preview_interval_ms": 900,
+    "preview_char_delta": 18
+  },
+  "subtitle": {
+    "mode": "bilingual",
+    "max_rows": 2,
+    "font_family": "Microsoft YaHei UI",
+    "source_size": 30,
+    "translation_size": 32,
+    "font_weight": 600,
+    "text_color": "#ffffff",
+    "outline_color": "#000000",
+    "outline_width": 2.0,
+    "shadow": true,
+    "line_height": 1.25,
+    "align": "center",
+    "background": "line",
+    "background_color": "rgba(0,0,0,0.62)",
+    "padding": 12,
+    "old_opacity": 0.68,
+    "preview_opacity": 0.86,
+    "stay_ms": 5000
+  },
+  "window": {
+    "x": 240,
+    "y": 700,
+    "width": 1200,
+    "height": 220,
+    "locked": false
+  },
+  "hotkey": {
+    "modifiers": 3,
+    "virtual_key": 76
+  }
+}

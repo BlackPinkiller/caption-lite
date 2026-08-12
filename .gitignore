@@ -1,0 +1,14 @@
+/build/
+/build-*/
+/.venv/
+/dist/
+/.vs/
+/.vscode/
+/out/
+/*.user
+*.pdb
+__pycache__/
+*.pyc
+runtime/
+models/
+config.json
