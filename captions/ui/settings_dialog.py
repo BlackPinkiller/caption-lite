@@ -299,8 +299,8 @@ class SettingsDialog(QDialog):
         language_form = QFormLayout(language_group)
         self.source_lang = WheelSafeComboBox()
         for label, code in (
-            ("英语（默认）", "EN"),
             ("自动检测", "AUTO"),
+            ("英语（默认）", "EN"),
             ("中文", "ZH"),
             ("日语", "JA"),
             ("韩语", "KO"),

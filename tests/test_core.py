@@ -759,6 +759,8 @@ class SettingsDialogTests(unittest.TestCase):
             ["识别", "翻译", "外观", "术语表"],
         )
         self.assertEqual(dialog.backend.currentData(), "llama")
+        self.assertEqual(dialog.source_lang.itemData(0), "AUTO")
+        self.assertEqual(dialog.source_lang.itemText(0), "自动检测")
         self.assertEqual(dialog.source_lang.currentData(), "EN")
         self.assertEqual(dialog.target_lang.currentData(), "ZH-HANS")
         self.assertFalse(dialog.asr_language.isEnabled())
