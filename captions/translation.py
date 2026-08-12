@@ -12,7 +12,11 @@ from typing import Callable
 import httpx
 from PySide6.QtCore import QObject, Signal
 
-from captions.config import TranslationConfig
+from captions.config import (
+    TranslationConfig,
+    active_llm_provider,
+    llm_chat_completions_url,
+)
 
 GOOGLE2_BOOTSTRAP_URL = (
     "https://translate.google.com/translate_a/element.js"
@@ -417,25 +421,40 @@ class Translator(QObject):
         elif config.backend == "deepl":
             result = Translator._deepl(text, config, timeout, client=client)
         else:
+            provider = active_llm_provider(config)
+            url = llm_chat_completions_url(provider)
+            if not url:
+                raise RuntimeError("请填写 LLM API 地址")
             prompt = build_hymt_prompt(text, history, config)
             payload = {
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
-                "stream": config.stream,
+                "stream": provider.stream,
                 "max_tokens": LLAMA_MAX_TOKENS,
             }
-            if config.stream:
+            if provider.model:
+                payload["model"] = provider.model
+            headers = {}
+            if provider.api_key:
+                headers["Authorization"] = f"Bearer {provider.api_key}"
+            if provider.stream:
                 result = Translator._llama_stream(
-                    config.llama_url,
+                    url,
                     payload,
                     timeout,
                     progress,
+                    headers=headers,
                     client=client,
                     cancellation=cancellation,
                 )
             else:
                 post = client.post if client is not None else httpx.post
-                response = post(config.llama_url, json=payload, timeout=timeout)
+                response = post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout,
+                )
                 response.raise_for_status()
                 data = response.json()
                 result = data["choices"][0]["message"]["content"].strip()
@@ -450,6 +469,7 @@ class Translator(QObject):
         timeout: float,
         progress: Callable[[str], None],
         *,
+        headers: dict[str, str] | None = None,
         client: httpx.Client | None = None,
         cancellation: TranslationCancellation | None = None,
     ) -> str:
@@ -459,7 +479,13 @@ class Translator(QObject):
         started_at = time.monotonic()
         stream = client.stream if client is not None else httpx.stream
         try:
-            with stream("POST", url, json=payload, timeout=timeout) as response:
+            with stream(
+                "POST",
+                url,
+                json=payload,
+                headers=headers or {},
+                timeout=timeout,
+            ) as response:
                 if cancellation is not None:
                     cancellation.attach(response)
                 try:

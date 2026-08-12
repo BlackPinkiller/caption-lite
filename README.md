@@ -3,7 +3,7 @@
 面向 Windows 10/11 的轻量实时字幕应用。它只捕获当前默认播放设备的系统混音，不使用麦克风；使用
 sherpa-onnx 运行 Nemotron 560 ms 英文流式识别，并可选 Nemotron 3.5 ASR 560 ms
 多语言模型或轻量中文 Zipformer INT8；音频先经过内置的 Silero VAD INT8 语音检测，只把语音片段送入 ASR；
-支持 llama.cpp + Hy-MT2、Google2 或 DeepL API 翻译。
+支持可配置的 OpenAI Compatible LLM（默认名称 OpenAI）、Google2 或 DeepL API 翻译。
 
 ## 交互设计
 
@@ -77,8 +77,8 @@ dist/
 首次保存设置或退出时，会在 EXE 旁生成 UTF-8 `config.json`。设置窗口可修改：
 
 - 语音识别模型、模型目录、识别语言和自动待机时间
-- 源语言与目标语言（默认英语 → 简体中文）、翻译后端、llama.cpp 地址、Google2 密钥、DeepL API 套餐与密钥
-- 超时、翻译偏好，以及 Llama 使用的上下文条数和字符上限
+- 源语言与目标语言（默认英语 → 简体中文）、翻译后端、LLM 提供商、Google2 密钥、DeepL API 套餐与密钥
+- LLM 的 API 地址、可选模型与密钥、流式响应，以及超时、翻译偏好和上下文上限
 - 分句软长度、向前回找和向后等待标点的窗口，以及时间上限
 - 预览发送的最小字符数、最迟发送间隔和立即发送变动量
 - 三种内置字幕主题与一个自动保存的自定义主题

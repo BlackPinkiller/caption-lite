@@ -21,7 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 from captions.app import CaptionApplication, TranslationJob
 from captions.audio_asr import (
@@ -36,6 +36,7 @@ from captions.audio_asr import (
 from captions.config import (
     AppConfig,
     CHINESE_MODEL_NAME,
+    LlmProviderConfig,
     MULTILINGUAL_MODEL_NAME,
     NEMOTRON_MULTILINGUAL_LANGUAGES,
     MODEL_CATALOG,
@@ -68,7 +69,11 @@ from captions.ui.history_dialog import (
     MAX_HISTORY_RECORDS,
     HistoryDialog,
 )
-from captions.ui.settings_dialog import SettingsDialog
+from captions.ui.settings_dialog import (
+    BACKEND_DELETE_ROLE,
+    BACKEND_SEPARATOR_ROLE,
+    SettingsDialog,
+)
 
 
 class SegmenterTests(unittest.TestCase):
@@ -156,6 +161,48 @@ class TranslationTests(unittest.TestCase):
 
         self.assertIn("日语字幕翻译成英语", prompt)
         self.assertNotIn("英文字幕翻译成简体中文", prompt)
+
+    def test_openai_compatible_provider_sends_optional_model_and_auth(self) -> None:
+        config = AppConfig().translation
+        config.llm_providers = [
+            LlmProviderConfig(
+                base_url="https://example.com/v1/",
+                model="translation-model",
+                api_key="secret",
+                stream=False,
+            )
+        ]
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": "测试译文"}}]},
+        )
+
+        with patch("captions.translation.httpx.post", return_value=response) as post:
+            translated = Translator._request("Test", [], config, lambda text: None)
+
+        self.assertEqual(translated, "测试译文")
+        self.assertEqual(post.call_args.args[0], "https://example.com/v1/chat/completions")
+        self.assertEqual(
+            post.call_args.kwargs["headers"],
+            {"Authorization": "Bearer secret"},
+        )
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "translation-model")
+
+    def test_openai_compatible_provider_allows_empty_model_and_api_key(self) -> None:
+        config = AppConfig().translation
+        config.llm_providers[0].stream = False
+        config.llm_providers[0].model = ""
+        config.llm_providers[0].api_key = ""
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": "测试译文"}}]},
+        )
+
+        with patch("captions.translation.httpx.post", return_value=response) as post:
+            Translator._request("Test", [], config, lambda text: None)
+
+        self.assertEqual(post.call_args.kwargs["headers"], {})
+        self.assertNotIn("model", post.call_args.kwargs["json"])
 
     def test_deepl_uses_the_selected_service_and_header_authentication(self) -> None:
         config = AppConfig().translation
@@ -1284,7 +1331,19 @@ class SettingsDialogTests(unittest.TestCase):
             [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())],
             ["识别", "翻译", "外观", "术语表"],
         )
-        self.assertEqual(dialog.backend.currentData(), "llama")
+        self.assertEqual(dialog.backend.currentData(), "llm:openai")
+        self.assertEqual(dialog.backend.currentText(), "OpenAI")
+        self.assertEqual(dialog.llm_base_url.text(), "https://api.openai.com/v1")
+        self.assertIn(
+            "API 地址",
+            [label.text() for label in dialog.findChildren(QLabel)],
+        )
+        self.assertEqual(
+            dialog.llm_base_url.placeholderText(),
+            "例如：https://api.openai.com/v1",
+        )
+        self.assertEqual(dialog.llm_model.placeholderText(), "输入模型名称")
+        self.assertEqual(dialog.llm_api_key.placeholderText(), "输入 API 密钥")
         self.assertEqual(dialog.asr_language.count(), 1)
         self.assertEqual(dialog.asr_language.currentData(), "en")
         self.assertEqual(dialog.source_lang.itemData(0), "AUTO")
@@ -1304,6 +1363,58 @@ class SettingsDialogTests(unittest.TestCase):
             [1, 2, 4, 8],
         )
         self.assertEqual(dialog.silence_endpoint.value(), 0.4)
+        dialog.close()
+
+    def test_llm_provider_is_added_from_the_backend_menu_and_edited_inline(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        add_index = dialog.backend.findData("add_llm_provider")
+
+        self.assertGreater(add_index, 0)
+        self.assertIn("添加 LLM 提供商", dialog.backend.itemText(add_index))
+        separator_index = add_index - 1
+        self.assertTrue(
+            dialog.backend.itemData(separator_index, BACKEND_SEPARATOR_ROLE)
+        )
+        self.assertFalse(dialog.backend.model().item(separator_index).isEnabled())
+        dialog.backend.setCurrentIndex(add_index)
+        self.assertEqual(dialog.llm_base_url.text(), "https://api.openai.com/v1")
+        dialog.llm_name.setText("工作翻译")
+        dialog.llm_model.setText("my-model")
+        dialog.llm_api_key.setText("optional-key")
+        dialog.stream.setChecked(False)
+        dialog.backend.setCurrentIndex(dialog.backend.findData("llm:openai"))
+        dialog.backend.setCurrentIndex(dialog.backend.findData("llm:llm-1"))
+
+        values = dialog.values()
+        provider = next(
+            item
+            for item in values.translation.llm_providers
+            if item.id == values.translation.llm_provider_id
+        )
+        self.assertEqual(values.translation.backend, "llama")
+        self.assertEqual(provider.name, "工作翻译")
+        self.assertEqual(provider.provider_type, "openai_compatible")
+        self.assertEqual(provider.model, "my-model")
+        self.assertEqual(provider.api_key, "optional-key")
+        self.assertFalse(provider.stream)
+        self.assertEqual(dialog.backend.currentText(), "工作翻译")
+        custom_index = dialog.backend.findData("llm:llm-1")
+        built_in_index = dialog.backend.findData("llm:openai")
+        self.assertTrue(dialog.backend.itemData(custom_index, BACKEND_DELETE_ROLE))
+        self.assertFalse(dialog.backend.itemData(built_in_index, BACKEND_DELETE_ROLE))
+        dialog.show()
+        dialog.backend.showPopup()
+        self.qt_app.processEvents()
+        model_index = dialog.backend.model().index(custom_index, 0)
+        delete_rect = dialog.backend.view().visualRect(model_index)
+        QTest.mouseClick(
+            dialog.backend.view().viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(delete_rect.right() - 4, delete_rect.center().y()),
+        )
+        self.qt_app.processEvents()
+        self.assertEqual(len(dialog.values().translation.llm_providers), 1)
+        self.assertEqual(dialog.backend.currentText(), "OpenAI")
         dialog.close()
 
     def test_expanding_advanced_settings_does_not_select_the_heading(self) -> None:
@@ -1775,6 +1886,41 @@ class ConfigTests(unittest.TestCase):
                 loaded.translation.google2_api_key,
                 "replacement-google2-key",
             )
+
+    def test_llm_provider_key_is_encrypted_at_rest_and_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = AppConfig()
+            config.translation.llm_providers[0].api_key = "llm-secret"
+
+            save_config(config, path)
+
+            stored = path.read_text(encoding="utf-8")
+            self.assertNotIn("llm-secret", stored)
+            self.assertIn("dpapi:", stored)
+            loaded, _ = load_config(path)
+            self.assertEqual(
+                loaded.translation.llm_providers[0].api_key,
+                "llm-secret",
+            )
+
+    def test_legacy_llama_url_migrates_to_the_llama_cpp_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"translation":{"backend":"llama",'
+                '"llama_url":"http://127.0.0.1:9000/v1/chat/completions",'
+                '"stream":false}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        provider = loaded.translation.llm_providers[0]
+        self.assertEqual(provider.name, "OpenAI")
+        self.assertEqual(provider.base_url, "http://127.0.0.1:9000/v1")
+        self.assertFalse(provider.stream)
+        self.assertEqual(loaded.translation.llm_provider_id, provider.id)
 
     def test_invalid_json_is_backed_up_and_defaults_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

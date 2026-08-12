@@ -15,12 +15,22 @@
     "backend": "llama",
     "source_lang": "EN",
     "target_lang": "ZH-HANS",
-    "llama_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "llm_provider_id": "openai",
+    "llm_providers": [
+      {
+        "id": "openai",
+        "name": "OpenAI",
+        "provider_type": "openai_compatible",
+        "base_url": "https://api.openai.com/v1",
+        "model": "",
+        "api_key": "",
+        "stream": true
+      }
+    ],
     "google2_api_key": "",
     "deepl_api_key": "",
     "deepl_api_plan": "free",
     "timeout_ms": 15000,
-    "stream": true,
     "context_segments": 3,
     "context_chars": 1200,
     "preference": "",

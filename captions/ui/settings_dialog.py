@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QSize, QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
@@ -25,6 +26,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget,
     QTextEdit,
     QToolButton,
@@ -34,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from captions.config import (
     AppConfig,
+    LlmProviderConfig,
     MODEL_CATALOG,
     SUBTITLE_THEME_PRESETS,
     SubtitleConfig,
@@ -46,6 +50,13 @@ from captions.config import (
     subtitle_style_values,
 )
 from captions.ui.caption_canvas import CaptionCanvas
+
+
+LLM_BACKEND_PREFIX = "llm:"
+ADD_LLM_PROVIDER = "add_llm_provider"
+BACKEND_DELETE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+BACKEND_SEPARATOR_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+BACKEND_DELETE_WIDTH = 32
 
 ASR_LANGUAGE_LABELS = {
     "auto": "自动检测",
@@ -97,6 +108,67 @@ class WheelSafeComboBox(QComboBox):
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         _forward_wheel_to_page(self, event)
+
+
+class BackendItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index) -> None:
+        if index.data(BACKEND_SEPARATOR_ROLE):
+            painter.save()
+            painter.setPen(option.palette.mid().color())
+            y = option.rect.center().y()
+            painter.drawLine(option.rect.left() + 8, y, option.rect.right() - 8, y)
+            painter.restore()
+            return
+        item_option = QStyleOptionViewItem(option)
+        if index.data(BACKEND_DELETE_ROLE):
+            item_option.rect = option.rect.adjusted(0, 0, -BACKEND_DELETE_WIDTH, 0)
+        super().paint(painter, item_option, index)
+        if not index.data(BACKEND_DELETE_ROLE):
+            return
+        delete_rect = QRect(
+            option.rect.right() - BACKEND_DELETE_WIDTH + 1,
+            option.rect.top(),
+            BACKEND_DELETE_WIDTH,
+            option.rect.height(),
+        )
+        painter.save()
+        painter.setPen(option.palette.text().color())
+        painter.drawText(delete_rect, Qt.AlignmentFlag.AlignCenter, "×")
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        if index.data(BACKEND_SEPARATOR_ROLE):
+            return QSize(super().sizeHint(option, index).width(), 9)
+        return super().sizeHint(option, index)
+
+
+class BackendComboBox(WheelSafeComboBox):
+    delete_requested = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setItemDelegate(BackendItemDelegate(self))
+        self.view().viewport().installEventFilter(self)
+
+    def set_item_deletable(self, index: int, deletable: bool) -> None:
+        self.setItemData(index, deletable, BACKEND_DELETE_ROLE)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self.view().viewport() and event.type() in {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+        }:
+            point = event.position().toPoint()
+            index = self.view().indexAt(point)
+            if index.isValid() and index.data(BACKEND_DELETE_ROLE):
+                rect = self.view().visualRect(index)
+                if point.x() >= rect.right() - BACKEND_DELETE_WIDTH + 1:
+                    if event.type() == QEvent.Type.MouseButtonRelease:
+                        backend = str(index.data(Qt.ItemDataRole.UserRole))
+                        self.hidePopup()
+                        self.delete_requested.emit(backend)
+                    return True
+        return super().eventFilter(watched, event)
 
 
 class WheelSafeSpinBox(QSpinBox):
@@ -206,6 +278,8 @@ class SettingsDialog(QDialog):
         self._loading = False
         self._applying_theme = False
         self._draft_custom_style = subtitle_custom_style(config.subtitle)
+        self._llm_providers: list[LlmProviderConfig] = []
+        self._current_llm_provider_id: str | None = None
         self.setWindowTitle("实时字幕设置")
         self.resize(680, 620)
         layout = QVBoxLayout(self)
@@ -394,18 +468,36 @@ class SettingsDialog(QDialog):
 
         service_group = QGroupBox("翻译服务")
         service_form = QFormLayout(service_group)
-        self.backend = WheelSafeComboBox()
-        self.backend.addItem("llama.cpp + Hy-MT2", "llama")
-        self.backend.addItem("Google2", "google2")
-        self.backend.addItem("DeepL API", "deepl")
+        self.backend = BackendComboBox()
+        self.backend.delete_requested.connect(self._delete_llm_provider)
         service_form.addRow("翻译后端", self.backend)
         self.backend_options = QStackedWidget()
 
         llama_page = QWidget()
         llama_form = QFormLayout(llama_page)
         llama_form.setContentsMargins(0, 0, 0, 0)
-        self.llama_url = QLineEdit()
-        llama_form.addRow("服务地址", self.llama_url)
+        identity = QWidget()
+        identity_layout = QHBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(8)
+        self.llm_name = QLineEdit()
+        self.llm_name.setPlaceholderText("名称")
+        identity_layout.addWidget(self.llm_name, 1)
+        identity_layout.addWidget(QLabel("接口"))
+        self.llm_type = WheelSafeComboBox()
+        self.llm_type.addItem("OpenAI Compatible", "openai_compatible")
+        identity_layout.addWidget(self.llm_type, 1)
+        llama_form.addRow("名称", identity)
+        self.llm_base_url = QLineEdit()
+        self.llm_base_url.setPlaceholderText("例如：https://api.openai.com/v1")
+        llama_form.addRow("API 地址", self.llm_base_url)
+        self.llm_model = QLineEdit()
+        self.llm_model.setPlaceholderText("输入模型名称")
+        llama_form.addRow("模型", self.llm_model)
+        self.llm_api_key = QLineEdit()
+        self.llm_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.llm_api_key.setPlaceholderText("输入 API 密钥")
+        llama_form.addRow("API 密钥", self.llm_api_key)
         self.stream = QCheckBox("启用流式响应")
         llama_form.addRow("", self.stream)
         self.backend_options.addWidget(llama_page)
@@ -449,6 +541,7 @@ class SettingsDialog(QDialog):
         self.translation_test_status.hide()
         service_form.addRow("", self.translation_test_status)
         self.backend.currentIndexChanged.connect(self._update_backend_controls)
+        self.llm_name.textChanged.connect(self._update_llm_provider_name)
         controls_layout.addWidget(service_group)
 
         self.preference_group = QGroupBox("翻译表达")
@@ -457,7 +550,7 @@ class SettingsDialog(QDialog):
         self.preference.setPlaceholderText("例如：人名保留英文；语气自然简洁")
         self.preference.setMaximumHeight(90)
         form.addRow("翻译偏好", self.preference)
-        preference_note = QLabel("翻译偏好与术语表由 Llama 后端使用。")
+        preference_note = QLabel("翻译偏好与术语表由 LLM 后端使用。")
         preference_note.setStyleSheet("color:#777")
         form.addRow("", preference_note)
         controls_layout.addWidget(self.preference_group)
@@ -471,7 +564,7 @@ class SettingsDialog(QDialog):
         self.timeout.setSuffix(" ms")
         request_form.addRow("请求超时", self.timeout)
         advanced.addWidget(request_group)
-        self.context_group = QGroupBox("Llama 上下文")
+        self.context_group = QGroupBox("LLM 上下文")
         context_form = QFormLayout(self.context_group)
         self.context_segments = WheelSafeSpinBox()
         self.context_segments.setRange(0, 12)
@@ -697,13 +790,16 @@ class SettingsDialog(QDialog):
         self.silence_endpoint.setValue(config.asr.silence_endpoint_ms / 1000)
         self._select(self.source_lang, config.translation.source_lang)
         self._select(self.target_lang, config.translation.target_lang)
-        self._select(self.backend, config.translation.backend)
-        self.llama_url.setText(config.translation.llama_url)
+        self._llm_providers = clone_config(config).translation.llm_providers
+        self._current_llm_provider_id = None
+        self._populate_backend_options(
+            config.translation.backend,
+            config.translation.llm_provider_id,
+        )
         self.google2_api_key.setText(config.translation.google2_api_key)
         self.deepl_api_key.setText(config.translation.deepl_api_key)
         self._select(self.deepl_api_plan, config.translation.deepl_api_plan)
         self.timeout.setValue(config.translation.timeout_ms)
-        self.stream.setChecked(config.translation.stream)
         self.context_segments.setValue(config.translation.context_segments)
         self.context_chars.setValue(config.translation.context_chars)
         self.max_chars.setValue(config.segmentation.max_chars)
@@ -777,6 +873,7 @@ class SettingsDialog(QDialog):
         combo.setCurrentIndex(max(0, index))
 
     def values(self) -> AppConfig:
+        self._store_current_llm_provider()
         config = clone_config(self.config)
         selected_variant = self.model_variant.currentData()
         if selected_variant != config.asr.model_variant:
@@ -788,15 +885,23 @@ class SettingsDialog(QDialog):
         config.asr.auto_standby_seconds = self.auto_standby.currentData()
         config.asr.num_threads = self.asr_threads.currentData()
         config.asr.silence_endpoint_ms = round(self.silence_endpoint.value() * 1000)
-        config.translation.backend = self.backend.currentData()
+        selected_backend = self.backend.currentData()
+        if isinstance(selected_backend, str) and selected_backend.startswith(
+            LLM_BACKEND_PREFIX
+        ):
+            config.translation.backend = "llama"
+            config.translation.llm_provider_id = selected_backend.removeprefix(
+                LLM_BACKEND_PREFIX
+            )
+        elif selected_backend in {"google2", "deepl"}:
+            config.translation.backend = selected_backend
+        config.translation.llm_providers = copy.deepcopy(self._llm_providers)
         config.translation.source_lang = self.source_lang.currentData()
         config.translation.target_lang = self.target_lang.currentData()
-        config.translation.llama_url = self.llama_url.text().strip()
         config.translation.google2_api_key = self.google2_api_key.text().strip()
         config.translation.deepl_api_key = self.deepl_api_key.text().strip()
         config.translation.deepl_api_plan = self.deepl_api_plan.currentData()
         config.translation.timeout_ms = self.timeout.value()
-        config.translation.stream = self.stream.isChecked()
         config.translation.context_segments = self.context_segments.value()
         config.translation.context_chars = self.context_chars.value()
         config.segmentation.max_chars = self.max_chars.value()
@@ -926,11 +1031,152 @@ class SettingsDialog(QDialog):
             self.source_lang.setCurrentIndex(index)
 
     def _update_backend_controls(self, *args) -> None:
-        self.backend_options.setCurrentIndex(max(0, self.backend.currentIndex()))
-        llama = self.backend.currentData() == "llama"
+        selected = self.backend.currentData()
+        if selected == ADD_LLM_PROVIDER:
+            self._add_llm_provider()
+            return
+        self._store_current_llm_provider()
+        llama = isinstance(selected, str) and selected.startswith(LLM_BACKEND_PREFIX)
+        if llama:
+            provider_id = selected.removeprefix(LLM_BACKEND_PREFIX)
+            self._load_llm_provider(provider_id)
+            self.backend_options.setCurrentIndex(0)
+        elif selected == "google2":
+            self._current_llm_provider_id = None
+            self.backend_options.setCurrentIndex(1)
+        elif selected == "deepl":
+            self._current_llm_provider_id = None
+            self.backend_options.setCurrentIndex(2)
         self.preference_group.setVisible(llama)
         self.context_group.setVisible(llama)
         self.set_translation_test_status("")
+
+    def _populate_backend_options(self, backend: str, provider_id: str) -> None:
+        blocker = QSignalBlocker(self.backend)
+        self.backend.clear()
+        for provider in self._llm_providers:
+            self.backend.addItem(provider.name, f"{LLM_BACKEND_PREFIX}{provider.id}")
+            self.backend.set_item_deletable(
+                self.backend.count() - 1,
+                provider.id != "openai",
+            )
+        self.backend.addItem("Google2", "google2")
+        self.backend.addItem("DeepL API", "deepl")
+        separator_index = self.backend.count()
+        self.backend.addItem("")
+        self.backend.setItemData(separator_index, True, BACKEND_SEPARATOR_ROLE)
+        separator = self.backend.model().item(separator_index)
+        if separator is not None:
+            separator.setEnabled(False)
+        self.backend.addItem("＋ 添加 LLM 提供商…", ADD_LLM_PROVIDER)
+        selected = (
+            f"{LLM_BACKEND_PREFIX}{provider_id}"
+            if backend == "llama"
+            else backend
+        )
+        index = self.backend.findData(selected)
+        self.backend.setCurrentIndex(max(0, index))
+        del blocker
+
+    def _provider_by_id(self, provider_id: str) -> LlmProviderConfig | None:
+        return next(
+            (provider for provider in self._llm_providers if provider.id == provider_id),
+            None,
+        )
+
+    def _store_current_llm_provider(self) -> None:
+        if self._loading or not self._current_llm_provider_id:
+            return
+        provider = self._provider_by_id(self._current_llm_provider_id)
+        if provider is None:
+            return
+        provider.name = self.llm_name.text().strip() or "OpenAI"
+        provider.provider_type = self.llm_type.currentData()
+        provider.base_url = self.llm_base_url.text().strip()
+        provider.model = self.llm_model.text().strip()
+        provider.api_key = self.llm_api_key.text().strip()
+        provider.stream = self.stream.isChecked()
+
+    def _load_llm_provider(self, provider_id: str) -> None:
+        provider = self._provider_by_id(provider_id)
+        if provider is None:
+            return
+        self._current_llm_provider_id = provider_id
+        blockers = [
+            QSignalBlocker(control)
+            for control in (
+                self.llm_name,
+                self.llm_type,
+                self.llm_base_url,
+                self.llm_model,
+                self.llm_api_key,
+                self.stream,
+            )
+        ]
+        self.llm_name.setText(provider.name)
+        self._select(self.llm_type, provider.provider_type)
+        self.llm_base_url.setText(provider.base_url)
+        self.llm_model.setText(provider.model)
+        self.llm_api_key.setText(provider.api_key)
+        self.stream.setChecked(provider.stream)
+        del blockers
+
+    def _add_llm_provider(self) -> None:
+        self._store_current_llm_provider()
+        suffix = 1
+        used_ids = {provider.id for provider in self._llm_providers}
+        while f"llm-{suffix}" in used_ids:
+            suffix += 1
+        provider = LlmProviderConfig(
+            id=f"llm-{suffix}",
+            name="OpenAI",
+        )
+        self._llm_providers.append(provider)
+        self._populate_backend_options("llama", provider.id)
+        self._load_llm_provider(provider.id)
+        self.backend_options.setCurrentIndex(0)
+        self.preference_group.setVisible(True)
+        self.context_group.setVisible(True)
+        self.set_translation_test_status("")
+        self.llm_name.setFocus()
+        self.llm_name.selectAll()
+
+    def _delete_llm_provider(self, backend: str) -> None:
+        if not backend.startswith(LLM_BACKEND_PREFIX):
+            return
+        provider_id = backend.removeprefix(LLM_BACKEND_PREFIX)
+        if provider_id == "openai":
+            return
+        self._store_current_llm_provider()
+        selected = self.backend.currentData()
+        self._llm_providers = [
+            provider
+            for provider in self._llm_providers
+            if provider.id != provider_id
+        ]
+        if selected == backend:
+            selected = f"{LLM_BACKEND_PREFIX}{self._llm_providers[0].id}"
+        selected_backend = "llama" if str(selected).startswith(LLM_BACKEND_PREFIX) else selected
+        selected_provider_id = (
+            str(selected).removeprefix(LLM_BACKEND_PREFIX)
+            if selected_backend == "llama"
+            else self._llm_providers[0].id
+        )
+        self._current_llm_provider_id = None
+        self._populate_backend_options(selected_backend, selected_provider_id)
+        self._update_backend_controls()
+
+    def _update_llm_provider_name(self, text: str) -> None:
+        if self._loading or not self._current_llm_provider_id:
+            return
+        provider = self._provider_by_id(self._current_llm_provider_id)
+        if provider is None:
+            return
+        provider.name = text.strip() or "OpenAI"
+        data = f"{LLM_BACKEND_PREFIX}{provider.id}"
+        index = self.backend.findData(data)
+        if index >= 0:
+            self.backend.setItemText(index, provider.name)
 
     def _browse_model(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "选择语音识别模型目录")

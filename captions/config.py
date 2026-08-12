@@ -157,16 +157,31 @@ class AsrConfig:
 
 
 @dataclass
+class LlmProviderConfig:
+    id: str = "openai"
+    name: str = "OpenAI"
+    provider_type: str = "openai_compatible"
+    base_url: str = "https://api.openai.com/v1"
+    model: str = ""
+    api_key: str = ""
+    stream: bool = True
+
+
+def default_llm_providers() -> list[LlmProviderConfig]:
+    return [LlmProviderConfig()]
+
+
+@dataclass
 class TranslationConfig:
     backend: str = "llama"
     source_lang: str = "EN"
     target_lang: str = "ZH-HANS"
-    llama_url: str = "http://127.0.0.1:8080/v1/chat/completions"
+    llm_provider_id: str = "openai"
+    llm_providers: list[LlmProviderConfig] = field(default_factory=default_llm_providers)
     google2_api_key: str = ""
     deepl_api_key: str = ""
     deepl_api_plan: str = "free"
     timeout_ms: int = 15000
-    stream: bool = True
     context_segments: int = 3
     context_chars: int = 1200
     preference: str = ""
@@ -337,6 +352,36 @@ def _merge_dataclass(instance: Any, values: dict[str, Any]) -> None:
             setattr(instance, key, value)
 
 
+def _llm_provider_from_dict(values: Any) -> LlmProviderConfig | None:
+    if not isinstance(values, dict):
+        return None
+    provider = LlmProviderConfig()
+    _merge_dataclass(provider, values)
+    return provider
+
+
+def _legacy_llm_base_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    suffix = "/chat/completions"
+    if url.lower().endswith(suffix):
+        return url[: -len(suffix)]
+    return url
+
+
+def active_llm_provider(config: TranslationConfig) -> LlmProviderConfig:
+    for provider in config.llm_providers:
+        if provider.id == config.llm_provider_id:
+            return provider
+    return config.llm_providers[0] if config.llm_providers else LlmProviderConfig()
+
+
+def llm_chat_completions_url(provider: LlmProviderConfig) -> str:
+    base_url = provider.base_url.strip().rstrip("/")
+    if base_url.lower().endswith("/chat/completions"):
+        return base_url
+    return f"{base_url}/chat/completions" if base_url else ""
+
+
 def _clamp(value: int | float, minimum: int | float, maximum: int | float):
     return max(minimum, min(maximum, value))
 
@@ -421,6 +466,41 @@ def _normalize_config(config: AppConfig) -> None:
 
     if config.translation.backend not in {"llama", "google2", "deepl"}:
         config.translation.backend = defaults.translation.backend
+    selected_provider_id = config.translation.llm_provider_id
+    normalized_providers: list[LlmProviderConfig] = []
+    used_provider_ids: set[str] = set()
+    for index, candidate in enumerate(config.translation.llm_providers, start=1):
+        if not isinstance(candidate, LlmProviderConfig):
+            continue
+        provider = copy.deepcopy(candidate)
+        original_id = provider.id.strip()
+        provider_id = original_id or f"llm-{index}"
+        if original_id == "llama-cpp" and provider.name.strip() == "llama.cpp":
+            provider_id = "openai"
+            provider.name = "OpenAI"
+            if selected_provider_id == original_id:
+                selected_provider_id = provider_id
+        if provider_id in used_provider_ids:
+            suffix = 2
+            while f"{provider_id}-{suffix}" in used_provider_ids:
+                suffix += 1
+            provider_id = f"{provider_id}-{suffix}"
+        used_provider_ids.add(provider_id)
+        provider.id = provider_id
+        provider.name = provider.name.strip() or "OpenAI"
+        provider.provider_type = "openai_compatible"
+        provider.base_url = provider.base_url.strip().rstrip("/")
+        provider.model = provider.model.strip()
+        provider.api_key = provider.api_key.strip()
+        normalized_providers.append(provider)
+    if not normalized_providers:
+        normalized_providers = default_llm_providers()
+    config.translation.llm_providers = normalized_providers
+    if selected_provider_id not in {
+        provider.id for provider in normalized_providers
+    }:
+        selected_provider_id = normalized_providers[0].id
+    config.translation.llm_provider_id = selected_provider_id
     if config.translation.deepl_api_plan not in {"free", "pro"}:
         config.translation.deepl_api_plan = defaults.translation.deepl_api_plan
     config.translation.timeout_ms = int(
@@ -504,10 +584,35 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
                         and not preset_fields.intersection(values)
                     ):
                         apply_model_preset(config.asr, variant)
-                if section == "translation" and "target_lang" not in values:
-                    legacy_target = values.get("deepl_target_lang")
-                    if isinstance(legacy_target, str) and legacy_target:
-                        values = {**values, "target_lang": legacy_target}
+                if section == "translation":
+                    if "target_lang" not in values:
+                        legacy_target = values.get("deepl_target_lang")
+                        if isinstance(legacy_target, str) and legacy_target:
+                            values = {**values, "target_lang": legacy_target}
+                    raw_providers = values.get("llm_providers")
+                    merge_values = {
+                        key: value
+                        for key, value in values.items()
+                        if key not in {"llm_providers", "llama_url"}
+                    }
+                    _merge_dataclass(config.translation, merge_values)
+                    if isinstance(raw_providers, list):
+                        providers = [
+                            provider
+                            for item in raw_providers
+                            if (provider := _llm_provider_from_dict(item)) is not None
+                        ]
+                        if providers:
+                            config.translation.llm_providers = providers
+                    else:
+                        legacy_url = values.get("llama_url")
+                        if isinstance(legacy_url, str) and legacy_url.strip():
+                            config.translation.llm_providers[0].base_url = (
+                                _legacy_llm_base_url(legacy_url)
+                            )
+                        legacy_stream = values.get("stream")
+                        if isinstance(legacy_stream, bool):
+                            config.translation.llm_providers[0].stream = legacy_stream
                 if section == "subtitle" and "max_sentences" not in values:
                     legacy_limit = values.get(
                         "max_rows", values.get("max_lines_per_language")
@@ -545,7 +650,7 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
                         config.subtitle.custom_style = subtitle_style_values(
                             config.subtitle
                         )
-                else:
+                elif section != "translation":
                     _merge_dataclass(getattr(config, section), values)
     _normalize_config(config)
     try:
@@ -555,6 +660,16 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
     except SecretStoreError as error:
         config.translation.deepl_api_key = ""
         setattr(config, "_load_warning", f"无法读取已保存的 DeepL 密钥：{error}")
+    for provider in config.translation.llm_providers:
+        try:
+            provider.api_key = unprotect_secret(provider.api_key)
+        except SecretStoreError as error:
+            provider.api_key = ""
+            setattr(
+                config,
+                "_load_warning",
+                f"无法读取已保存的 {provider.name} 密钥：{error}",
+            )
     return config, path
 
 
@@ -565,6 +680,10 @@ def save_config(config: AppConfig, path: Path) -> None:
     key = root["translation"]["deepl_api_key"]
     if key:
         root["translation"]["deepl_api_key"] = protect_secret(key)
+    for provider in root["translation"]["llm_providers"]:
+        key = provider["api_key"]
+        if key:
+            provider["api_key"] = protect_secret(key)
     temporary.write_text(
         json.dumps(root, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
