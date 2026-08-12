@@ -18,7 +18,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
@@ -53,6 +53,7 @@ from captions.config import (
 )
 from captions.model_download import ModelDownloadWorker
 from captions.segmenter import Segmenter
+from captions.task_sessions import CaptureSession, ModelDownloadSession
 from captions.translation import (
     HistoryRecord,
     MAX_PENDING_FINAL_TRANSLATIONS,
@@ -940,6 +941,43 @@ class CaptureLifecycleTests(unittest.TestCase):
         app.translation_session.shutting_down = False
         CaptionApplication._maybe_finish_quit(app)
         self.assertEqual(events, ["watchdog", "tray", "quit"])
+
+
+class TaskSessionCleanupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.qt_app = QApplication.instance() or QApplication([])
+
+    def test_finished_sessions_wait_for_native_thread_cleanup(self) -> None:
+        class RecordingThread(QThread):
+            def __init__(self, parent=None) -> None:
+                super().__init__(parent)
+                self.wait_called = False
+
+            def wait(self, *args) -> bool:
+                self.wait_called = True
+                return super().wait(*args)
+
+        for session in (CaptureSession(), ModelDownloadSession()):
+            thread = RecordingThread(session)
+            session.thread = thread
+            session.worker = object()
+            completed: list[bool] = []
+            thread.finished.connect(session._thread_finished)
+            session.finished.connect(lambda: completed.append(True))
+            thread.started.connect(thread.quit)
+
+            thread.start()
+            deadline = time.monotonic() + 2
+            while not completed and time.monotonic() < deadline:
+                self.qt_app.processEvents()
+                time.sleep(0.005)
+
+            self.assertEqual(completed, [True])
+            self.assertTrue(thread.wait_called)
+            self.assertFalse(thread.isRunning())
+            self.assertIsNone(session.thread)
+            self.assertIsNone(session.worker)
 
 
 class AudioAsrTests(unittest.TestCase):

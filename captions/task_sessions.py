@@ -66,8 +66,13 @@ class CaptureSession(QObject):
             self.worker.set_auto_standby_seconds(seconds)
 
     def _thread_finished(self) -> None:
-        if self.sender() is not self.thread:
+        thread = self.thread
+        if self.sender() is not thread:
             return
+        # QThread.finished is emitted before the native thread has necessarily
+        # completed its thread_local cleanup. Do not let QApplication teardown
+        # destroy Qt TLS while that final cleanup is still running.
+        thread.wait()
         self.thread = None
         self.worker = None
         self.finished.emit()
@@ -132,8 +137,10 @@ class ModelDownloadSession(QObject):
             self.worker.cancel()
 
     def _thread_finished(self) -> None:
-        if self.sender() is not self.thread:
+        thread = self.thread
+        if self.sender() is not thread:
             return
+        thread.wait()
         self.thread = None
         self.worker = None
         self.finished.emit()
