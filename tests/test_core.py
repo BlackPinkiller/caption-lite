@@ -40,6 +40,7 @@ from captions.translation import (
     Translator,
     build_hymt_prompt,
     matching_glossary,
+    translation_queue_expired,
 )
 from captions.ui.caption_canvas import CaptionCanvas
 from captions.ui.history_dialog import (
@@ -189,7 +190,7 @@ class TranslationTests(unittest.TestCase):
         release = threading.Event()
         calls: list[str] = []
 
-        def fake_request(text, history, config, progress):
+        def fake_request(text, history, config, progress, **kwargs):
             calls.append(text)
             if text == "first":
                 started.set()
@@ -215,7 +216,7 @@ class TranslationTests(unittest.TestCase):
         release = threading.Event()
         errors: list[str] = []
 
-        def fake_request(text, history, config, progress):
+        def fake_request(text, history, config, progress, **kwargs):
             started.set()
             release.wait(2)
             return text
@@ -245,7 +246,7 @@ class TranslationTests(unittest.TestCase):
     def test_translation_task_only_keeps_configured_history(self) -> None:
         received_lengths: list[int] = []
 
-        def fake_request(text, history, config, progress):
+        def fake_request(text, history, config, progress, **kwargs):
             received_lengths.append(len(history))
             return text
 
@@ -264,6 +265,10 @@ class TranslationTests(unittest.TestCase):
             translator.close()
 
         self.assertEqual(received_lengths, [3])
+
+    def test_final_translation_expires_after_the_configured_queue_age(self) -> None:
+        self.assertFalse(translation_queue_expired(10.0, 15000, now=24.9))
+        self.assertTrue(translation_queue_expired(10.0, 15000, now=25.1))
 
     def test_streaming_response_has_a_hard_character_limit(self) -> None:
         class FakeResponse:

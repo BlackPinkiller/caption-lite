@@ -64,6 +64,18 @@ class HistoryRecord:
     forced: bool = False
 
 
+class StaleTranslationError(RuntimeError):
+    pass
+
+
+def translation_queue_expired(
+    submitted_at: float, timeout_ms: int, *, now: float | None = None
+) -> bool:
+    now = time.monotonic() if now is None else now
+    maximum_age = max(1.0, timeout_ms / 1000)
+    return now - submitted_at > maximum_age
+
+
 def matching_glossary(glossary: dict[str, str], text: str) -> list[tuple[str, str]]:
     matches: list[tuple[str, str]] = []
     for source, target in glossary.items():
@@ -128,6 +140,15 @@ class Translator(QObject):
         self._overload_cancellations: set[Future] = set()
         self._pending_preview: Future | None = None
         self._lock = threading.Lock()
+        limits = httpx.Limits(
+            max_connections=2,
+            max_keepalive_connections=1,
+            keepalive_expiry=5.0,
+        )
+        self._preview_client = httpx.Client(limits=limits, http2=False)
+        self._final_client = httpx.Client(limits=limits, http2=False)
+        self._closing = False
+        self._clients_closed = False
 
     def translate(
         self,
@@ -146,13 +167,20 @@ class Translator(QObject):
         if not preview:
             self._make_room_for_final_translation()
         executor = self._preview_executor if preview else self._final_executor
+        client = self._preview_client if preview else self._final_client
+        submitted_at = time.monotonic()
         def request() -> str:
+            if not preview and translation_queue_expired(
+                submitted_at, config.timeout_ms
+            ):
+                raise StaleTranslationError()
             self.signals.started.emit(generation)
             return self._request(
                 text,
                 snapshot,
                 config,
                 lambda partial: self.signals.progress.emit(generation, partial),
+                client=client,
             )
 
         future = executor.submit(request)
@@ -172,8 +200,15 @@ class Translator(QObject):
                     self._final_futures.remove(completed)
                 if self._pending_preview is completed:
                     self._pending_preview = None
+                close_clients = (
+                    self._closing and not self._futures and not self._clients_closed
+                )
+                if close_clients:
+                    self._clients_closed = True
             try:
                 result = completed.result()
+            except StaleTranslationError:
+                self.signals.cancelled.emit(generation)
             except CancelledError:
                 if overloaded:
                     self.signals.error.emit(
@@ -186,6 +221,9 @@ class Translator(QObject):
                 self.signals.error.emit(generation, str(error))
             else:
                 self.signals.result.emit(generation, result)
+            if close_clients:
+                self._preview_client.close()
+                self._final_client.close()
 
         future.add_done_callback(done)
         return generation
@@ -218,8 +256,17 @@ class Translator(QObject):
 
     def close(self) -> None:
         self.cancel_pending()
+        with self._lock:
+            self._closing = True
         self._preview_executor.shutdown(wait=False, cancel_futures=True)
         self._final_executor.shutdown(wait=False, cancel_futures=True)
+        with self._lock:
+            close_clients = not self._futures and not self._clients_closed
+            if close_clients:
+                self._clients_closed = True
+        if close_clients:
+            self._preview_client.close()
+            self._final_client.close()
 
     @staticmethod
     def _request(
@@ -227,12 +274,14 @@ class Translator(QObject):
         history: list[HistoryRecord],
         config: TranslationConfig,
         progress: Callable[[str], None],
+        *,
+        client: httpx.Client | None = None,
     ) -> str:
         timeout = max(1.0, config.timeout_ms / 1000)
         if config.backend == "google2":
-            return Translator._google2(text, config, timeout)
+            return Translator._google2(text, config, timeout, client=client)
         if config.backend == "deepl":
-            return Translator._deepl(text, config, timeout)
+            return Translator._deepl(text, config, timeout, client=client)
         prompt = build_hymt_prompt(text, history, config)
         payload = {
             "messages": [{"role": "user", "content": prompt}],
@@ -241,8 +290,11 @@ class Translator(QObject):
             "max_tokens": LLAMA_MAX_TOKENS,
         }
         if config.stream:
-            return Translator._llama_stream(config.llama_url, payload, timeout, progress)
-        response = httpx.post(config.llama_url, json=payload, timeout=timeout)
+            return Translator._llama_stream(
+                config.llama_url, payload, timeout, progress, client=client
+            )
+        post = client.post if client is not None else httpx.post
+        response = post(config.llama_url, json=payload, timeout=timeout)
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
@@ -253,10 +305,13 @@ class Translator(QObject):
         payload: dict,
         timeout: float,
         progress: Callable[[str], None],
+        *,
+        client: httpx.Client | None = None,
     ) -> str:
         text = ""
         started_at = time.monotonic()
-        with httpx.stream("POST", url, json=payload, timeout=timeout) as response:
+        stream = client.stream if client is not None else httpx.stream
+        with stream("POST", url, json=payload, timeout=timeout) as response:
             response.raise_for_status()
             for line in response.iter_lines():
                 if time.monotonic() - started_at > timeout:
@@ -276,7 +331,13 @@ class Translator(QObject):
         return text.strip()
 
     @staticmethod
-    def _google2(text: str, config: TranslationConfig, timeout: float) -> str:
+    def _google2(
+        text: str,
+        config: TranslationConfig,
+        timeout: float,
+        *,
+        client: httpx.Client | None = None,
+    ) -> str:
         url = "https://translate-pa.googleapis.com/v1/translateHtml"
         source_lang = GOOGLE_LANGUAGE_CODES.get(config.source_lang, "en")
         target_lang = GOOGLE_LANGUAGE_CODES.get(config.target_lang, "zh-CN")
@@ -286,9 +347,10 @@ class Translator(QObject):
             "X-Goog-API-Key": GOOGLE2_API_KEY,
         }
         last_error: Exception | None = None
+        post = client.post if client is not None else httpx.post
         for _ in range(2):
             try:
-                response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+                response = post(url, headers=headers, json=payload, timeout=timeout)
                 response.raise_for_status()
                 data = response.json()
                 return str(data[0][0])
@@ -297,7 +359,13 @@ class Translator(QObject):
         raise RuntimeError(f"Google2 翻译失败：{last_error}")
 
     @staticmethod
-    def _deepl(text: str, config: TranslationConfig, timeout: float) -> str:
+    def _deepl(
+        text: str,
+        config: TranslationConfig,
+        timeout: float,
+        *,
+        client: httpx.Client | None = None,
+    ) -> str:
         api_key = config.deepl_api_key.strip() or os.environ.get("DEEPL_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("尚未填写 DeepL API 密钥")
@@ -308,7 +376,8 @@ class Translator(QObject):
         }
         if config.source_lang and config.source_lang != "AUTO":
             payload["source_lang"] = "ZH" if config.source_lang.startswith("ZH-") else config.source_lang
-        response = httpx.post(
+        post = client.post if client is not None else httpx.post
+        response = post(
             f"https://{host}/v2/translate",
             headers={
                 "Authorization": f"DeepL-Auth-Key {api_key}",
