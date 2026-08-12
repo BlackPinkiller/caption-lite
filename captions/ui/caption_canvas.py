@@ -101,10 +101,11 @@ class CaptionCanvas(QWidget):
         self.update()
 
     def _font(self, kind: str) -> QFont:
-        point_size = (
+        pixel_size = (
             self.style.source_size if kind == "source" else self.style.translation_size
         )
-        font = QFont(self.style.font_family, point_size)
+        font = QFont(self.style.font_family)
+        font.setPixelSize(pixel_size)
         font.setWeight(QFont.Weight(max(100, min(900, self.style.font_weight))))
         return font
 
@@ -204,7 +205,9 @@ class CaptionCanvas(QWidget):
                 text, self._font(kind), available, kind == "source"
             )
             visible.extend(CaptionLine(line, kind, opacity) for line in wrapped)
-        return visible
+        # `max_rows` limits physical display lines only. Recognition,
+        # translation, history, and the naturally wrapped text stay unchanged.
+        return visible[-limit:]
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)

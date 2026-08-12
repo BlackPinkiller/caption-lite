@@ -583,6 +583,33 @@ class CaptionCanvasTests(unittest.TestCase):
         self.assertGreater(line, none + 1000)
         self.assertGreater(block, line + 1000)
 
+    def test_physical_wrapped_lines_respect_the_display_budget(self) -> None:
+        style = AppConfig().subtitle
+        style.mode = "source"
+        style.max_rows = 2
+        canvas = CaptionCanvas(style)
+        canvas.resize(420, 220)
+        canvas.set_cue(
+            1,
+            "This is a deliberately long subtitle that wraps naturally across "
+            "several physical lines in a narrow caption window.",
+            "",
+        )
+
+        lines = canvas._visible_lines(380)
+
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.kind == "source" for line in lines))
+
+    def test_caption_size_setting_is_measured_in_pixels(self) -> None:
+        style = AppConfig().subtitle
+        style.source_size = 30
+        style.translation_size = 32
+        canvas = CaptionCanvas(style)
+
+        self.assertEqual(canvas._font("source").pixelSize(), 30)
+        self.assertEqual(canvas._font("translation").pixelSize(), 32)
+
 
 class SettingsDialogTests(unittest.TestCase):
     @classmethod
