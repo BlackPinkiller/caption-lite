@@ -749,6 +749,6 @@ class SettingsDialog(QDialog):
         self.set_translation_test_status("")
 
     def _browse_model(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "选择 Nemotron 模型目录")
+        selected = QFileDialog.getExistingDirectory(self, "选择语音识别模型目录")
         if selected:
             self.model_dir.setText(str(Path(selected)))

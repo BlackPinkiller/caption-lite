@@ -109,7 +109,7 @@ class ModelDownloadWorker(QObject):
             source = staging / self.model_name
             required = tuple(source / name for name in self.required_files)
             if not all(path.is_file() for path in required):
-                raise RuntimeError("下载包中缺少所需的 Nemotron 模型文件")
+                raise RuntimeError("下载包中缺少所需的语音识别模型文件")
             self._check_cancelled()
             backup = parent / f".{self.destination.name}.previous-{os.getpid()}"
             had_previous = self.destination.exists()
