@@ -10,7 +10,7 @@ import hashlib
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -169,6 +169,7 @@ class TranslationTests(unittest.TestCase):
         config.backend = "google2"
         config.source_lang = "JA"
         config.target_lang = "EN-US"
+        config.google2_api_key = "editable-google2-key"
         response = SimpleNamespace(
             raise_for_status=lambda: None,
             json=lambda: [["Hello"]],
@@ -179,6 +180,63 @@ class TranslationTests(unittest.TestCase):
 
         self.assertEqual(translated, "Hello")
         self.assertEqual(post.call_args.kwargs["json"], [[["こんにちは"], "ja", "en"], "wt_lib"])
+        self.assertEqual(
+            post.call_args.kwargs["headers"]["X-Goog-API-Key"],
+            "editable-google2-key",
+        )
+
+    def test_google2_fetches_a_key_when_configuration_is_empty(self) -> None:
+        config = AppConfig().translation
+        config.google2_api_key = ""
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [["测试译文"]],
+        )
+        client = Mock()
+        client.post.return_value = response
+        with patch.object(
+            Translator,
+            "acquire_google2_api_key",
+            return_value="fetched-google2-key",
+        ):
+            translated = Translator._google2(
+                "Test",
+                config,
+                15.0,
+                client=client,
+            )
+
+        self.assertEqual(translated, "测试译文")
+        self.assertEqual(config.google2_api_key, "fetched-google2-key")
+        self.assertEqual(
+            client.post.call_args.kwargs["headers"]["X-Goog-API-Key"],
+            "fetched-google2-key",
+        )
+
+    def test_google2_key_is_extracted_from_current_component_script(self) -> None:
+        key = "AIza" + "a" * 35
+        bootstrap = SimpleNamespace(
+            text=(
+                "_loadJs('https:\\/\\/translate.googleapis.com\\/_\\/"
+                "translate_http\\/_\\/js\\/k\\x3dversion\\/m\\x3del_main')"
+            ),
+            raise_for_status=lambda: None,
+        )
+        main_script = SimpleNamespace(
+            text=(
+                'path:"/v1/translateHtml",method:"POST",headers:'
+                '{"X-goog-api-key":"' + key + '"}'
+            ),
+            raise_for_status=lambda: None,
+        )
+        client = Mock()
+        client.get.side_effect = [bootstrap, main_script]
+
+        self.assertEqual(
+            Translator.acquire_google2_api_key(client=client),
+            key,
+        )
+        self.assertEqual(client.get.call_count, 2)
 
     def test_deepl_requires_a_key(self) -> None:
         config = AppConfig().translation
@@ -974,6 +1032,20 @@ class ConfigTests(unittest.TestCase):
             self.assertIn("dpapi:", stored)
             loaded, _ = load_config(path)
             self.assertEqual(loaded.translation.deepl_api_key, "local-test-key")
+
+    def test_google2_key_round_trips_as_editable_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = AppConfig()
+            config.translation.google2_api_key = "replacement-google2-key"
+
+            save_config(config, path)
+
+            loaded, _ = load_config(path)
+            self.assertEqual(
+                loaded.translation.google2_api_key,
+                "replacement-google2-key",
+            )
 
     def test_invalid_json_is_backed_up_and_defaults_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

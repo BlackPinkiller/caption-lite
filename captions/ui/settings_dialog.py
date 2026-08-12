@@ -351,9 +351,16 @@ class SettingsDialog(QDialog):
         llama_form.addRow("", self.stream)
         self.backend_options.addWidget(llama_page)
 
-        google_page = QLabel("无需额外设置，使用上方选择的语言方向。")
-        google_page.setWordWrap(True)
-        google_page.setStyleSheet("color:#777")
+        google_page = QWidget()
+        google_form = QFormLayout(google_page)
+        google_form.setContentsMargins(0, 0, 0, 0)
+        self.google2_api_key = QLineEdit()
+        self.google2_api_key.setPlaceholderText("首次使用时自动从 Google 获取")
+        google_form.addRow("密钥", self.google2_api_key)
+        google_note = QLabel("程序会自动获取并保存，通常无需修改；需要时可直接覆盖。")
+        google_note.setWordWrap(True)
+        google_note.setStyleSheet("color:#777")
+        google_form.addRow("", google_note)
         self.backend_options.addWidget(google_page)
 
         deepl_page = QWidget()
@@ -573,6 +580,7 @@ class SettingsDialog(QDialog):
         self._select(self.target_lang, config.translation.target_lang)
         self._select(self.backend, config.translation.backend)
         self.llama_url.setText(config.translation.llama_url)
+        self.google2_api_key.setText(config.translation.google2_api_key)
         self.deepl_api_key.setText(config.translation.deepl_api_key)
         self._select(self.deepl_api_plan, config.translation.deepl_api_plan)
         self.timeout.setValue(config.translation.timeout_ms)
@@ -610,6 +618,10 @@ class SettingsDialog(QDialog):
         self._update_backend_controls()
         self._refresh_model_path_status()
         self._update_style_preview()
+
+    def set_google2_api_key(self, key: str) -> None:
+        if not self.google2_api_key.text().strip():
+            self.google2_api_key.setText(key)
 
     def set_model_status(self, text: str, downloadable: bool = False) -> None:
         self.model_status.setText(
@@ -660,6 +672,7 @@ class SettingsDialog(QDialog):
         config.translation.source_lang = self.source_lang.currentData()
         config.translation.target_lang = self.target_lang.currentData()
         config.translation.llama_url = self.llama_url.text().strip()
+        config.translation.google2_api_key = self.google2_api_key.text().strip()
         config.translation.deepl_api_key = self.deepl_api_key.text().strip()
         config.translation.deepl_api_plan = self.deepl_api_plan.currentData()
         config.translation.timeout_ms = self.timeout.value()

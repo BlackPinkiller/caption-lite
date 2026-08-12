@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 import time
 
@@ -24,10 +25,17 @@ class TranslationSession(QObject):
     error = Signal(int, object, str)
     cancelled = Signal(int, object)
     previews_discarded = Signal()
+    google2_key_ready = Signal(str)
+    google2_key_error = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.translator = Translator()
+        self._key_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="google2-key",
+        )
+        self._key_future: Future | None = None
         self.jobs: dict[int, TranslationJob] = {}
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
@@ -103,8 +111,25 @@ class TranslationSession(QObject):
     def has_job(self, generation: int) -> bool:
         return generation in self.jobs
 
+    def request_google2_key(self) -> None:
+        if self._key_future is not None and not self._key_future.done():
+            return
+        future = self._key_executor.submit(Translator.acquire_google2_api_key)
+        self._key_future = future
+
+        def done(completed: Future) -> None:
+            try:
+                key = completed.result()
+            except Exception as error:
+                self.google2_key_error.emit(str(error))
+            else:
+                self.google2_key_ready.emit(key)
+
+        future.add_done_callback(done)
+
     def close(self) -> None:
         self.preview_timer.stop()
+        self._key_executor.shutdown(wait=False, cancel_futures=True)
         self.translator.close()
 
     @Slot()

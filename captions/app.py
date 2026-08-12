@@ -100,6 +100,8 @@ class CaptionApplication(QObject):
         self.overlay.show()
         self.overlay.raise_()
         self.tray.show()
+        if not self.config.translation.google2_api_key.strip():
+            self.translation_session.request_google2_key()
         if self.config_load_warning:
             self.tray.showMessage(
                 "配置已恢复",
@@ -147,6 +149,12 @@ class CaptionApplication(QObject):
         self.translation_session.cancelled.connect(self._translation_cancelled)
         self.translation_session.previews_discarded.connect(
             self._translation_previews_discarded
+        )
+        self.translation_session.google2_key_ready.connect(
+            self._google2_key_ready
+        )
+        self.translation_session.google2_key_error.connect(
+            self._google2_key_error
         )
 
     def _create_tray(self) -> QSystemTrayIcon:
@@ -353,6 +361,19 @@ class CaptionApplication(QObject):
         if self.display_kind == "preview":
             self.display_generation = 0
             self.display_kind = ""
+
+    @Slot(str)
+    def _google2_key_ready(self, key: str) -> None:
+        if self.config.translation.google2_api_key.strip():
+            return
+        self.config.translation.google2_api_key = key
+        self.settings.set_google2_api_key(key)
+        self._schedule_save()
+
+    @Slot(str)
+    def _google2_key_error(self, message: str) -> None:
+        if self.config.translation.backend == "google2":
+            self._set_status(f"Google2 密钥获取失败：{message}")
 
     @Slot(int, object)
     def _translation_started(self, generation: int, job: TranslationJob) -> None:

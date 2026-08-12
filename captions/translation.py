@@ -14,7 +14,10 @@ from PySide6.QtCore import QObject, Signal
 
 from captions.config import TranslationConfig
 
-GOOGLE2_API_KEY = "REDACTED_GOOGLE_API_KEY"
+GOOGLE2_BOOTSTRAP_URL = (
+    "https://translate.google.com/translate_a/element.js"
+    "?cb=googleTranslateElementInit"
+)
 MAX_PENDING_FINAL_TRANSLATIONS = 32
 MAX_STREAM_RESPONSE_CHARS = 16_384
 LLAMA_MAX_TOKENS = 1_024
@@ -269,6 +272,60 @@ class Translator(QObject):
             self._final_client.close()
 
     @staticmethod
+    def acquire_google2_api_key(
+        timeout: float = 10.0,
+        *,
+        client: httpx.Client | None = None,
+    ) -> str:
+        get = client.get if client is not None else httpx.get
+        headers = {"User-Agent": "Mozilla/5.0"}
+        bootstrap = get(
+            GOOGLE2_BOOTSTRAP_URL,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        bootstrap.raise_for_status()
+        candidates = re.findall(r"_loadJs\('([^']+)'\)", bootstrap.text)
+        main_url = ""
+        for candidate in candidates:
+            decoded = re.sub(
+                r"\\x([0-9a-fA-F]{2})",
+                lambda match: chr(int(match.group(1), 16)),
+                candidate,
+            )
+            decoded = re.sub(
+                r"\\u([0-9a-fA-F]{4})",
+                lambda match: chr(int(match.group(1), 16)),
+                decoded,
+            ).replace(r"\/", "/")
+            if (
+                decoded.startswith("https://translate.googleapis.com/")
+                and "translate_http" in decoded
+                and decoded.endswith("/m=el_main")
+            ):
+                main_url = decoded
+                break
+        if not main_url:
+            raise RuntimeError("Google 翻译组件未提供主脚本地址")
+
+        main_script = get(
+            main_url,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        main_script.raise_for_status()
+        match = re.search(
+            r'/v1/translateHtml.{0,500}?X-goog-api-key"?:"(AIza[0-9A-Za-z_-]{35})"',
+            main_script.text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match is None:
+            raise RuntimeError("Google 翻译组件未提供 translateHtml 密钥")
+        return match.group(1)
+
+    @staticmethod
     def _request(
         text: str,
         history: list[HistoryRecord],
@@ -339,12 +396,19 @@ class Translator(QObject):
         client: httpx.Client | None = None,
     ) -> str:
         url = "https://translate-pa.googleapis.com/v1/translateHtml"
+        api_key = config.google2_api_key.strip()
+        if not api_key:
+            api_key = Translator.acquire_google2_api_key(
+                timeout,
+                client=client,
+            )
+            config.google2_api_key = api_key
         source_lang = GOOGLE_LANGUAGE_CODES.get(config.source_lang, "en")
         target_lang = GOOGLE_LANGUAGE_CODES.get(config.target_lang, "zh-CN")
         payload = [[[text], source_lang, target_lang], "wt_lib"]
         headers = {
             "Content-Type": "application/json+protobuf",
-            "X-Goog-API-Key": GOOGLE2_API_KEY,
+            "X-Goog-API-Key": api_key,
         }
         last_error: Exception | None = None
         post = client.post if client is not None else httpx.post

@@ -14,6 +14,7 @@
     "source_lang": "EN",
     "target_lang": "ZH-HANS",
     "llama_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "google2_api_key": "",
     "deepl_api_key": "",
     "deepl_api_plan": "free",
     "timeout_ms": 15000,

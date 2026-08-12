@@ -30,7 +30,6 @@ CHINESE_MODEL_URL = (
     f"{CHINESE_MODEL_NAME}.tar.bz2"
 )
 
-
 @dataclass(frozen=True)
 class ModelPreset:
     label: str
@@ -117,6 +116,7 @@ class TranslationConfig:
     source_lang: str = "EN"
     target_lang: str = "ZH-HANS"
     llama_url: str = "http://127.0.0.1:8080/v1/chat/completions"
+    google2_api_key: str = ""
     deepl_api_key: str = ""
     deepl_api_plan: str = "free"
     timeout_ms: int = 15000
