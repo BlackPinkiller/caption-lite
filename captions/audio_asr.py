@@ -8,7 +8,12 @@ import numpy as np
 import soundcard as sc
 from PySide6.QtCore import QObject, Signal, Slot
 
-from captions.config import AppConfig, bundled_resource_path, resolve_model_files
+from captions.config import (
+    AppConfig,
+    bundled_resource_path,
+    model_preset,
+    resolve_model_files,
+)
 
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
@@ -204,7 +209,7 @@ class AudioAsrWorker(QObject):
 
     def _create_stream(self, recognizer):
         stream = recognizer.create_stream()
-        if self.config.asr.model_variant == "multilingual":
+        if model_preset(self.config.asr.model_variant).supports_language:
             stream.set_option("language", self.config.asr.language or "auto")
         return stream
 
@@ -243,7 +248,7 @@ class AudioAsrWorker(QObject):
         missing = [str(path) for path in files.values() if not path.is_file()]
         if missing:
             raise RuntimeError(
-                "Nemotron 模型不完整，请将模型文件放入以下位置：\n"
+                "语音识别模型不完整，请将模型文件放入以下位置：\n"
                 + "\n".join(missing)
             )
         return sherpa_onnx.OnlineRecognizer.from_transducer(
@@ -256,6 +261,7 @@ class AudioAsrWorker(QObject):
             feature_dim=80,
             provider=provider,
             decoding_method="greedy_search",
+            model_type=model_preset(self.config.asr.model_variant).model_type,
             enable_endpoint_detection=True,
             rule1_min_trailing_silence=2.4,
             rule2_min_trailing_silence=2.4,

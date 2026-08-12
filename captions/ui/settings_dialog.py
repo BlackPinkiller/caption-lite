@@ -34,7 +34,9 @@ from PySide6.QtWidgets import (
 
 from captions.config import (
     AppConfig,
+    MODEL_CATALOG,
     SubtitleConfig,
+    apply_model_preset,
     clone_config,
     default_model_dir,
     model_is_complete,
@@ -188,8 +190,8 @@ class SettingsDialog(QDialog):
         model_group = QGroupBox("语音识别")
         form = QFormLayout(model_group)
         self.model_variant = WheelSafeComboBox()
-        self.model_variant.addItem("Nemotron 560 ms（英文，默认）", "english")
-        self.model_variant.addItem("Nemotron 3.5 560 ms（多语言）", "multilingual")
+        for key, preset in MODEL_CATALOG.items():
+            self.model_variant.addItem(preset.label, key)
         form.addRow("识别模型", self.model_variant)
         self.model_dir = QLineEdit()
         browse = QPushButton("浏览…")
@@ -243,7 +245,7 @@ class SettingsDialog(QDialog):
         self.recognition_advanced = advanced
         model_files_group = QGroupBox("模型文件")
         model_files_form = QFormLayout(model_files_group)
-        model_files_form.addRow("Nemotron 模型", row)
+        model_files_form.addRow("模型目录", row)
         advanced.addWidget(model_files_group)
 
         segmentation_group = QGroupBox("分句与实时预览")
@@ -611,7 +613,7 @@ class SettingsDialog(QDialog):
 
     def set_model_status(self, text: str, downloadable: bool = False) -> None:
         self.model_status.setText(
-            "下载 Nemotron 模型…" if downloadable else f"模型：{text}"
+            "下载语音识别模型…" if downloadable else f"模型：{text}"
         )
         self.model_status.setEnabled(downloadable)
 
@@ -646,7 +648,11 @@ class SettingsDialog(QDialog):
 
     def values(self) -> AppConfig:
         config = clone_config(self.config)
-        config.asr.model_variant = self.model_variant.currentData()
+        selected_variant = self.model_variant.currentData()
+        if selected_variant != config.asr.model_variant:
+            apply_model_preset(config.asr, selected_variant)
+        else:
+            config.asr.model_variant = selected_variant
         config.asr.model_dir = self.model_dir.text().strip()
         config.asr.language = self.asr_language.currentData()
         config.asr.auto_standby_seconds = self.auto_standby.currentData()
@@ -728,9 +734,11 @@ class SettingsDialog(QDialog):
         self._refresh_model_path_status()
 
     def _update_model_controls(self) -> None:
-        multilingual = self.model_variant.currentData() == "multilingual"
-        self.asr_language.setEnabled(multilingual)
-        if not multilingual:
+        supports_language = MODEL_CATALOG[
+            self.model_variant.currentData()
+        ].supports_language
+        self.asr_language.setEnabled(supports_language)
+        if not supports_language:
             self._select(self.asr_language, "auto")
 
     def _update_backend_controls(self, *args) -> None:

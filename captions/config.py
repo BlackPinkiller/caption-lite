@@ -24,19 +24,67 @@ MULTILINGUAL_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     f"{MULTILINGUAL_MODEL_NAME}.tar.bz2"
 )
-MODEL_PRESETS = {
-    "english": (MODEL_NAME, MODEL_URL),
-    "multilingual": (MULTILINGUAL_MODEL_NAME, MULTILINGUAL_MODEL_URL),
-}
-MODEL_DOWNLOAD_INTEGRITY = {
-    "english": (
+CHINESE_MODEL_NAME = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+CHINESE_MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    f"{CHINESE_MODEL_NAME}.tar.bz2"
+)
+
+
+@dataclass(frozen=True)
+class ModelPreset:
+    label: str
+    name: str
+    url: str
+    size: int
+    sha256: str
+    encoder: str
+    decoder: str
+    joiner: str
+    tokens: str = "tokens.txt"
+    model_type: str = ""
+    supports_language: bool = False
+
+
+MODEL_CATALOG = {
+    "english": ModelPreset(
+        "Nemotron 560 ms（英文，默认）",
+        MODEL_NAME,
+        MODEL_URL,
         463_945_051,
         "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "joiner.int8.onnx",
     ),
-    "multilingual": (
+    "multilingual": ModelPreset(
+        "Nemotron 3.5 560 ms（多语言）",
+        MULTILINGUAL_MODEL_NAME,
+        MULTILINGUAL_MODEL_URL,
         475_271_763,
         "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "joiner.int8.onnx",
+        supports_language=True,
     ),
+    "chinese": ModelPreset(
+        "Zipformer INT8（中文，轻量）",
+        CHINESE_MODEL_NAME,
+        CHINESE_MODEL_URL,
+        132_634_597,
+        "5a2832047ea1f97dd0dc595b816c230c4bafad65cfc0341fa57517cadc50afd0",
+        "encoder.int8.onnx",
+        "decoder.onnx",
+        "joiner.int8.onnx",
+        model_type="zipformer2",
+    ),
+}
+MODEL_PRESETS = {
+    key: (preset.name, preset.url) for key, preset in MODEL_CATALOG.items()
+}
+MODEL_DOWNLOAD_INTEGRITY = {
+    key: (preset.size, preset.sha256) for key, preset in MODEL_CATALOG.items()
 }
 
 
@@ -252,6 +300,15 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
         ):
             values = root.get(section)
             if isinstance(values, dict):
+                if section == "asr" and "model_variant" in values:
+                    variant = values.get("model_variant")
+                    preset_fields = {"model_dir", "encoder", "decoder", "joiner", "tokens"}
+                    if (
+                        isinstance(variant, str)
+                        and variant in MODEL_CATALOG
+                        and not preset_fields.intersection(values)
+                    ):
+                        apply_model_preset(config.asr, variant)
                 if section == "translation" and "target_lang" not in values:
                     legacy_target = values.get("deepl_target_lang")
                     if isinstance(legacy_target, str) and legacy_target:
@@ -319,6 +376,21 @@ def model_download_integrity(config: AppConfig) -> tuple[int, str]:
     )
 
 
+def model_preset(model_variant: str) -> ModelPreset:
+    return MODEL_CATALOG.get(model_variant, MODEL_CATALOG["english"])
+
+
+def apply_model_preset(asr: AsrConfig, model_variant: str) -> None:
+    preset = model_preset(model_variant)
+    asr.model_variant = model_variant if model_variant in MODEL_CATALOG else "english"
+    asr.model_dir = f"models/{preset.name}"
+    asr.encoder = preset.encoder
+    asr.decoder = preset.decoder
+    asr.joiner = preset.joiner
+    asr.tokens = preset.tokens
+    if not preset.supports_language:
+        asr.language = "auto"
+
+
 def default_model_dir(model_variant: str) -> str:
-    name, _ = MODEL_PRESETS.get(model_variant, MODEL_PRESETS["english"])
-    return f"models/{name}"
+    return f"models/{model_preset(model_variant).name}"

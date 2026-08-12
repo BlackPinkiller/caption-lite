@@ -34,6 +34,12 @@ class ModelDownloadWorker(QObject):
         model_url: str = MODEL_URL,
         expected_size: int | None = None,
         expected_sha256: str = "",
+        required_files: tuple[str, ...] = (
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ),
     ) -> None:
         super().__init__()
         self.destination = destination
@@ -41,6 +47,7 @@ class ModelDownloadWorker(QObject):
         self.model_url = model_url
         self.expected_size = expected_size
         self.expected_sha256 = expected_sha256.lower()
+        self.required_files = required_files
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -100,12 +107,7 @@ class ModelDownloadWorker(QObject):
                     bundle.extract(member, staging, filter="data")
 
             source = staging / self.model_name
-            required = (
-                source / "encoder.int8.onnx",
-                source / "decoder.int8.onnx",
-                source / "joiner.int8.onnx",
-                source / "tokens.txt",
-            )
+            required = tuple(source / name for name in self.required_files)
             if not all(path.is_file() for path in required):
                 raise RuntimeError("下载包中缺少所需的 Nemotron 模型文件")
             self._check_cancelled()

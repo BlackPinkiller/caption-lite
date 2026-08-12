@@ -98,6 +98,7 @@ class ModelDownloadSession(QObject):
         model_url: str,
         expected_size: int,
         expected_sha256: str,
+        required_files: tuple[str, ...],
     ) -> bool:
         if self.running:
             return False
@@ -108,6 +109,7 @@ class ModelDownloadSession(QObject):
             model_url=model_url,
             expected_size=expected_size,
             expected_sha256=expected_sha256,
+            required_files=required_files,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)

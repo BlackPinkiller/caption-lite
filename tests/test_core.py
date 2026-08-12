@@ -24,7 +24,9 @@ from captions.app import CaptionApplication, TranslationJob
 from captions.audio_asr import AudioAsrWorker, AutoStandbyDetector, VadSpeechGate
 from captions.config import (
     AppConfig,
+    CHINESE_MODEL_NAME,
     MULTILINGUAL_MODEL_NAME,
+    apply_model_preset,
     default_model_dir,
     load_config,
     model_download_integrity,
@@ -1053,6 +1055,17 @@ class ConfigTests(unittest.TestCase):
         self.assertGreater(multilingual[0], 0)
         self.assertEqual(len(multilingual[1]), 64)
         self.assertNotEqual(english, multilingual)
+
+    def test_chinese_model_preset_updates_its_compatible_files(self) -> None:
+        config = AppConfig()
+
+        apply_model_preset(config.asr, "chinese")
+
+        self.assertEqual(config.asr.model_variant, "chinese")
+        self.assertIn(CHINESE_MODEL_NAME, config.asr.model_dir)
+        self.assertEqual(config.asr.encoder, "encoder.int8.onnx")
+        self.assertEqual(config.asr.decoder, "decoder.onnx")
+        self.assertEqual(config.asr.joiner, "joiner.int8.onnx")
 
 
 class ModelDownloadTests(unittest.TestCase):

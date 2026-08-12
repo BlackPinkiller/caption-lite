@@ -2,7 +2,7 @@
 
 面向 Windows 10/11 的轻量实时字幕应用。它只捕获当前默认播放设备的系统混音，不使用麦克风；使用
 sherpa-onnx 运行 Nemotron 560 ms 英文流式识别，并可选 Nemotron 3.5 ASR 560 ms
-多语言模型；音频先经过内置的 Silero VAD INT8 语音检测，只把语音片段送入 ASR；
+多语言模型或轻量中文 Zipformer INT8；音频先经过内置的 Silero VAD INT8 语音检测，只把语音片段送入 ASR；
 支持 llama.cpp + Hy-MT2、Google2 或 DeepL API 翻译。
 
 ## 交互设计
@@ -37,7 +37,8 @@ sherpa-onnx 运行 Nemotron 560 ms 英文流式识别，并可选 Nemotron 3.5 A
 .\tools\download-nemotron-model.ps1 -Multilingual
 ```
 
-模型约 632 MB，只需下载一次，保存在 `models` 目录。模型缺失时，应用会询问是否下载；
+Nemotron 下载包约 442–453 MiB，中文 Zipformer 约 126 MiB，只需下载一次，保存在
+`models` 目录。模型缺失时，应用会询问是否下载；
 托盘模型项和设置窗口的模型状态项都会变成下载按钮。下载百分比、解压和模型加载状态会同时
 显示在设置窗口、托盘右键菜单与悬浮提示中。下载完成后会验证官方发布包的大小和 SHA-256，
 通过后再原子替换模型目录；校验失败不会覆盖已有模型。

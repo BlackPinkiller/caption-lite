@@ -18,6 +18,7 @@ from captions.config import (
     model_download_integrity,
     model_download_spec,
     model_is_complete,
+    model_preset,
     resolve_model_dir,
     save_config,
 )
@@ -446,7 +447,7 @@ class CaptionApplication(QObject):
     def _asr_error(self, message: str) -> None:
         self.asr_error_message = message
         missing = "模型不完整" in message
-        compact = "缺少 Nemotron 模型" if missing else "识别无法启动"
+        compact = "缺少语音识别模型" if missing else "识别无法启动"
         self._set_status(f"识别无法启动：{message}", compact)
         if missing:
             self._set_model_missing()
@@ -578,9 +579,11 @@ class CaptionApplication(QObject):
         prompt = QMessageBox(self.overlay)
         prompt.setWindowTitle("需要语音模型")
         prompt.setIcon(QMessageBox.Icon.Question)
-        prompt.setText("未检测到 Nemotron 语音识别模型。")
+        preset = model_preset(self.config.asr.model_variant)
+        prompt.setText(f"未检测到 {preset.label} 语音识别模型。")
+        model_megabytes = round(preset.size / (1024 * 1024))
         prompt.setInformativeText(
-            "模型约 650 MB，只需下载一次。是否现在下载？"
+            f"模型约 {model_megabytes} MB，只需下载一次。是否现在下载？"
         )
         prompt.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -614,6 +617,12 @@ class CaptionApplication(QObject):
             model_url=model_url,
             expected_size=expected_size,
             expected_sha256=expected_sha256,
+            required_files=(
+                self.config.asr.encoder,
+                self.config.asr.decoder,
+                self.config.asr.joiner,
+                self.config.asr.tokens,
+            ),
         )
 
     @Slot(object)
@@ -627,9 +636,8 @@ class CaptionApplication(QObject):
             or requested.asr.language != self.config.asr.language
         ):
             config = clone_config(self.config)
-            config.asr.model_variant = requested.asr.model_variant
+            config.asr = clone_config(requested).asr
             config.asr.model_dir = model_dir
-            config.asr.language = requested.asr.language
             self.apply_settings(config)
         self.download_model()
 
@@ -687,7 +695,7 @@ class CaptionApplication(QObject):
     def _set_model_missing(self) -> None:
         self.model_text = "未安装"
         if hasattr(self, "model_action"):
-            self.model_action.setText("下载 Nemotron 模型…")
+            self.model_action.setText("下载语音识别模型…")
             self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
             self.settings.set_model_status("未安装", downloadable=True)

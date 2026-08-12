@@ -12,7 +12,12 @@ from PySide6.QtCore import QCoreApplication, QThread, QTimer
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from captions.audio_asr import AudioAsrWorker
-from captions.config import AppConfig, MODEL_PRESETS, application_dir, default_model_dir
+from captions.config import (
+    AppConfig,
+    MODEL_PRESETS,
+    apply_model_preset,
+    application_dir,
+)
 
 
 def main() -> int:
@@ -24,7 +29,7 @@ def main() -> int:
         default=None,
     )
     parser.add_argument(
-        "--model", choices=("english", "multilingual"), default="english"
+        "--model", choices=tuple(MODEL_PRESETS), default="english"
     )
     parser.add_argument("--language", default="auto")
     args = parser.parse_args()
@@ -38,8 +43,7 @@ def main() -> int:
     app = QCoreApplication([])
     thread = QThread()
     config = AppConfig()
-    config.asr.model_variant = args.model
-    config.asr.model_dir = default_model_dir(args.model)
+    apply_model_preset(config.asr, args.model)
     config.asr.language = args.language
     worker = AudioAsrWorker(config)
     worker.moveToThread(thread)
