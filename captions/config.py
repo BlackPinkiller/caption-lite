@@ -3,10 +3,13 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from captions.secret_store import SecretStoreError, protect_secret, unprotect_secret
 
 
 MODEL_NAME = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
@@ -124,17 +127,111 @@ class AppConfig:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
 
 
+def _compatible_value(default: Any, value: Any) -> bool:
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    if isinstance(default, dict):
+        return isinstance(value, dict) and all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in value.items()
+        )
+    return isinstance(value, type(default))
+
+
 def _merge_dataclass(instance: Any, values: dict[str, Any]) -> None:
     for key, value in values.items():
-        if hasattr(instance, key):
+        if hasattr(instance, key) and _compatible_value(getattr(instance, key), value):
             setattr(instance, key, value)
+
+
+def _clamp(value: int | float, minimum: int | float, maximum: int | float):
+    return max(minimum, min(maximum, value))
+
+
+def _normalize_config(config: AppConfig) -> None:
+    defaults = AppConfig()
+    if config.asr.model_variant not in MODEL_PRESETS:
+        config.asr.model_variant = defaults.asr.model_variant
+    config.asr.auto_standby_seconds = int(
+        _clamp(config.asr.auto_standby_seconds, 0, 3600)
+    )
+
+    if config.translation.backend not in {"llama", "google2", "deepl"}:
+        config.translation.backend = defaults.translation.backend
+    if config.translation.deepl_api_plan not in {"free", "pro"}:
+        config.translation.deepl_api_plan = defaults.translation.deepl_api_plan
+    config.translation.timeout_ms = int(
+        _clamp(config.translation.timeout_ms, 1000, 120000)
+    )
+    config.translation.context_segments = int(
+        _clamp(config.translation.context_segments, 0, 12)
+    )
+    config.translation.context_chars = int(
+        _clamp(config.translation.context_chars, 0, 12000)
+    )
+
+    segmentation = config.segmentation
+    segmentation.max_chars = int(_clamp(segmentation.max_chars, 40, 1000))
+    segmentation.split_lookback_chars = int(
+        _clamp(segmentation.split_lookback_chars, 0, 200)
+    )
+    segmentation.split_lookahead_chars = int(
+        _clamp(segmentation.split_lookahead_chars, 0, 500)
+    )
+    segmentation.max_seconds = int(_clamp(segmentation.max_seconds, 5, 120))
+    segmentation.preview_min_chars = int(
+        _clamp(segmentation.preview_min_chars, 0, 100)
+    )
+    segmentation.preview_interval_ms = int(
+        _clamp(segmentation.preview_interval_ms, 100, 10000)
+    )
+    segmentation.preview_char_delta = int(
+        _clamp(segmentation.preview_char_delta, 1, 200)
+    )
+
+    subtitle = config.subtitle
+    if subtitle.mode not in {"bilingual", "source", "translation"}:
+        subtitle.mode = defaults.subtitle.mode
+    subtitle.max_rows = int(_clamp(subtitle.max_rows, 2, 6))
+    subtitle.source_size = int(_clamp(subtitle.source_size, 14, 72))
+    subtitle.translation_size = int(_clamp(subtitle.translation_size, 14, 72))
+    subtitle.font_weight = int(_clamp(subtitle.font_weight, 100, 900))
+    subtitle.outline_width = float(_clamp(subtitle.outline_width, 0, 8))
+    subtitle.line_height = float(_clamp(subtitle.line_height, 0.8, 3.0))
+    if subtitle.align not in {"left", "center", "right"}:
+        subtitle.align = defaults.subtitle.align
+    if subtitle.background not in {"none", "line", "block"}:
+        subtitle.background = defaults.subtitle.background
+    subtitle.padding = int(_clamp(subtitle.padding, 0, 48))
+    subtitle.old_opacity = float(_clamp(subtitle.old_opacity, 0, 1))
+    subtitle.preview_opacity = float(_clamp(subtitle.preview_opacity, 0, 1))
+    subtitle.stay_ms = int(_clamp(subtitle.stay_ms, 0, 60000))
+    config.window.width = max(360, config.window.width)
+    config.window.height = max(100, config.window.height)
 
 
 def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
     path = path or application_dir() / "config.json"
     config = AppConfig()
     if path.exists():
-        root = json.loads(path.read_text(encoding="utf-8-sig"))
+        try:
+            root = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(root, dict):
+                raise ValueError("配置根节点必须是对象")
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+            backup = path.with_name(f"{path.stem}.invalid{path.suffix}")
+            try:
+                shutil.copy2(path, backup)
+            except OSError:
+                pass
+            setattr(config, "_load_warning", f"配置文件已损坏，已使用默认设置：{error}")
+            return config, path
         for section in (
             "asr",
             "translation",
@@ -154,14 +251,26 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
                     if isinstance(legacy_rows, int):
                         values = {**values, "max_rows": legacy_rows}
                 _merge_dataclass(getattr(config, section), values)
+    _normalize_config(config)
+    try:
+        config.translation.deepl_api_key = unprotect_secret(
+            config.translation.deepl_api_key
+        )
+    except SecretStoreError as error:
+        config.translation.deepl_api_key = ""
+        setattr(config, "_load_warning", f"无法读取已保存的 DeepL 密钥：{error}")
     return config, path
 
 
 def save_config(config: AppConfig, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
+    root = asdict(config)
+    key = root["translation"]["deepl_api_key"]
+    if key:
+        root["translation"]["deepl_api_key"] = protect_secret(key)
     temporary.write_text(
-        json.dumps(asdict(config), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(root, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     os.replace(temporary, path)

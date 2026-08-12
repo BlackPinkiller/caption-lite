@@ -899,6 +899,47 @@ class ConfigTests(unittest.TestCase):
             loaded, _ = load_config(path)
             self.assertEqual(loaded.translation.glossary["Vault"], "避难所")
 
+    def test_deepl_key_is_encrypted_at_rest_and_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = AppConfig()
+            config.translation.deepl_api_key = "local-test-key"
+
+            save_config(config, path)
+
+            stored = path.read_text(encoding="utf-8")
+            self.assertNotIn("local-test-key", stored)
+            self.assertIn("dpapi:", stored)
+            loaded, _ = load_config(path)
+            self.assertEqual(loaded.translation.deepl_api_key, "local-test-key")
+
+    def test_invalid_json_is_backed_up_and_defaults_are_used(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text("{invalid", encoding="utf-8")
+
+            loaded, _ = load_config(path)
+
+            self.assertEqual(loaded, AppConfig())
+            self.assertTrue(path.with_name("config.invalid.json").is_file())
+            self.assertTrue(getattr(loaded, "_load_warning", ""))
+
+    def test_invalid_types_and_ranges_fall_back_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"translation":{"backend":42,"timeout_ms":999999},'
+                '"subtitle":{"mode":"unknown","max_rows":500}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+            self.assertEqual(loaded.translation.backend, "llama")
+            self.assertEqual(loaded.translation.timeout_ms, 120000)
+            self.assertEqual(loaded.subtitle.mode, "bilingual")
+            self.assertEqual(loaded.subtitle.max_rows, 6)
+
     def test_new_features_keep_existing_defaults(self) -> None:
         config = AppConfig()
         self.assertEqual(config.asr.model_variant, "english")

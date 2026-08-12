@@ -81,8 +81,12 @@ dist/
 - 术语表，格式为 `识别文本 = 目标译文`
 
 Google2 使用 Google Translate 客户端公开调用方式，选择后即可使用，无需填写密钥。
-DeepL 使用官方 `/v2/translate` API；密钥保存在程序旁的本地 `config.json`，也可通过
-`DEEPL_API_KEY` 环境变量提供。DeepL API Free 与 Pro 使用各自的官方服务地址。
+DeepL 使用官方 `/v2/translate` API；密钥通过 Windows 当前用户 DPAPI 加密后保存在本地
+`config.json`，也可通过 `DEEPL_API_KEY` 环境变量提供。DeepL API Free 与 Pro 使用各自的
+官方服务地址。加密后的密钥只能由保存它的 Windows 用户读取。
+
+配置文件会按字段校验类型与范围；某个字段无效时只恢复该字段的默认值。JSON 文件整体损坏时，
+原内容会备份为 `config.invalid.json`，应用使用默认设置继续启动，并通过托盘提示恢复情况。
 
 llama.cpp 预览采用“当前请求 + 最新待处理文本”的合并策略：当前请求的流式结果会继续显示，
 尚未开始的旧预览会被最新文本替换，避免 ASR 高频更新造成请求堆积或界面一直丢弃当前结果。

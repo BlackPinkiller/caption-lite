@@ -365,7 +365,7 @@ class SettingsDialog(QDialog):
         self.deepl_api_plan.addItem("DeepL API Free", "free")
         self.deepl_api_plan.addItem("DeepL API Pro", "pro")
         deepl_form.addRow("API 套餐", self.deepl_api_plan)
-        key_note = QLabel("密钥仅保存在程序旁的本地 config.json 中。")
+        key_note = QLabel("密钥使用 Windows 当前用户加密后保存在本地配置中。")
         key_note.setStyleSheet("color:#777")
         key_note.setWordWrap(True)
         deepl_form.addRow("", key_note)

@@ -47,6 +47,7 @@ class CaptionApplication(QObject):
         super().__init__()
         self.qt_app = qt_app
         self.config, self.config_path = load_config()
+        self.config_load_warning = getattr(self.config, "_load_warning", "")
         self.segmenter = Segmenter(
             max_chars=self.config.segmentation.max_chars,
             max_seconds=self.config.segmentation.max_seconds,
@@ -120,6 +121,13 @@ class CaptionApplication(QObject):
         self.overlay.show()
         self.overlay.raise_()
         self.tray.show()
+        if self.config_load_warning:
+            self.tray.showMessage(
+                "配置已恢复",
+                self.config_load_warning,
+                QSystemTrayIcon.MessageIcon.Warning,
+                6000,
+            )
         if model_is_complete(self.config):
             self._set_model_status("已就绪")
             self._set_status("正在启动识别")
