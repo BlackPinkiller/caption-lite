@@ -6,6 +6,7 @@ import time
 import unittest
 import os
 import io
+import hashlib
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from captions.config import (
     MULTILINGUAL_MODEL_NAME,
     default_model_dir,
     load_config,
+    model_download_integrity,
     model_download_spec,
     model_is_complete,
     save_config,
@@ -982,6 +984,18 @@ class ConfigTests(unittest.TestCase):
             (Path(directory) / config.asr.tokens).write_text("token", encoding="utf-8")
             self.assertTrue(model_is_complete(config))
 
+    def test_model_download_integrity_is_pinned_for_each_preset(self) -> None:
+        config = AppConfig()
+        english = model_download_integrity(config)
+        config.asr.model_variant = "multilingual"
+        multilingual = model_download_integrity(config)
+
+        self.assertGreater(english[0], 0)
+        self.assertEqual(len(english[1]), 64)
+        self.assertGreater(multilingual[0], 0)
+        self.assertEqual(len(multilingual[1]), 64)
+        self.assertNotEqual(english, multilingual)
+
 
 class ModelDownloadTests(unittest.TestCase):
     @staticmethod
@@ -1018,9 +1032,15 @@ class ModelDownloadTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "model"
+            destination.mkdir()
+            (destination / "obsolete.onnx").write_bytes(b"old")
             completed: list[bool] = []
             progress: list[tuple[int, int]] = []
-            worker = ModelDownloadWorker(destination)
+            worker = ModelDownloadWorker(
+                destination,
+                expected_size=len(payload),
+                expected_sha256=hashlib.sha256(payload).hexdigest(),
+            )
             worker.completed.connect(lambda: completed.append(True))
             worker.progress.connect(
                 lambda downloaded, total: progress.append((downloaded, total))
@@ -1034,6 +1054,38 @@ class ModelDownloadTests(unittest.TestCase):
             self.assertEqual(completed, [True])
             self.assertTrue(progress)
             self.assertTrue((destination / "encoder.int8.onnx").is_file())
+            self.assertFalse((destination / "obsolete.onnx").exists())
+            self.assertFalse(any(Path(directory).glob(".*.download")))
+
+    def test_download_rejects_a_failed_integrity_check(self) -> None:
+        payload = self._archive()
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(len(payload))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "model"
+            errors: list[str] = []
+            worker = ModelDownloadWorker(
+                destination,
+                expected_size=len(payload),
+                expected_sha256="0" * 64,
+            )
+            worker.error.connect(errors.append)
+            with patch(
+                "captions.model_download.urllib.request.urlopen",
+                return_value=Response(payload),
+            ):
+                worker.run()
+
+            self.assertTrue(errors)
+            self.assertFalse(destination.exists())
             self.assertFalse(any(Path(directory).glob(".*.download")))
 
 

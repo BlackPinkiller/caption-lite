@@ -7,6 +7,10 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 Push-Location $projectRoot
 try {
+    & $python 'tools\verify_environment.py'
+    if ($LASTEXITCODE -ne 0) { throw 'Build environment does not match the lock file' }
+    & $python -m pip check
+    if ($LASTEXITCODE -ne 0) { throw 'Python dependency check failed' }
     & $python -m PyInstaller --noconfirm --clean RealtimeSubtitle.spec
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
     Copy-Item -LiteralPath 'config.example.json' -Destination 'dist\config.example.json' -Force

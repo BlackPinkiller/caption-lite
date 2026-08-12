@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import shutil
 import tarfile
 import threading
@@ -29,11 +32,15 @@ class ModelDownloadWorker(QObject):
         *,
         model_name: str = MODEL_NAME,
         model_url: str = MODEL_URL,
+        expected_size: int | None = None,
+        expected_sha256: str = "",
     ) -> None:
         super().__init__()
         self.destination = destination
         self.model_name = model_name
         self.model_url = model_url
+        self.expected_size = expected_size
+        self.expected_sha256 = expected_sha256.lower()
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -61,6 +68,7 @@ class ModelDownloadWorker(QObject):
             with urllib.request.urlopen(request, timeout=30) as response:
                 total = int(response.headers.get("Content-Length") or 0)
                 downloaded = 0
+                digest = hashlib.sha256()
                 with archive.open("wb") as output:
                     while True:
                         self._check_cancelled()
@@ -68,8 +76,20 @@ class ModelDownloadWorker(QObject):
                         if not chunk:
                             break
                         output.write(chunk)
+                        digest.update(chunk)
                         downloaded += len(chunk)
                         self.progress.emit(downloaded, total)
+
+            if self.expected_size is not None and downloaded != self.expected_size:
+                raise RuntimeError(
+                    "模型下载大小不正确："
+                    f"应为 {self.expected_size} 字节，实际为 {downloaded} 字节"
+                )
+            actual_sha256 = digest.hexdigest()
+            if self.expected_sha256 and not hmac.compare_digest(
+                actual_sha256, self.expected_sha256
+            ):
+                raise RuntimeError("模型下载校验失败，请重新下载")
 
             self._check_cancelled()
             self.status.emit("正在解压模型")
@@ -89,10 +109,19 @@ class ModelDownloadWorker(QObject):
             if not all(path.is_file() for path in required):
                 raise RuntimeError("下载包中缺少所需的 Nemotron 模型文件")
             self._check_cancelled()
-            if self.destination.exists():
-                shutil.copytree(source, self.destination, dirs_exist_ok=True)
-            else:
+            backup = parent / f".{self.destination.name}.previous-{os.getpid()}"
+            had_previous = self.destination.exists()
+            if had_previous:
+                self.destination.replace(backup)
+            try:
                 source.replace(self.destination)
+            except Exception:
+                if had_previous and backup.exists() and not self.destination.exists():
+                    backup.replace(self.destination)
+                raise
+            else:
+                if backup.exists():
+                    shutil.rmtree(backup)
             self.completed.emit()
         except DownloadCancelled:
             self.cancelled.emit()

@@ -1,13 +1,15 @@
+from importlib.util import find_spec
+
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
-sherpa_binaries = []
-hidden = []
-for package in ("sherpa_onnx", "sherpa_onnx_core", "sherpa_onnx_bin"):
-    try:
+sherpa_binaries = collect_dynamic_libs("sherpa_onnx")
+hidden = collect_submodules("sherpa_onnx")
+if not sherpa_binaries:
+    raise RuntimeError("No sherpa-onnx dynamic libraries were collected")
+for package in ("sherpa_onnx_core", "sherpa_onnx_bin"):
+    if find_spec(package) is not None:
         sherpa_binaries += collect_dynamic_libs(package)
         hidden += collect_submodules(package)
-    except Exception:
-        pass
 
 a = Analysis(
     ["main.py"],

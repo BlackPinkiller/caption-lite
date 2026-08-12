@@ -28,6 +28,16 @@ MODEL_PRESETS = {
     "english": (MODEL_NAME, MODEL_URL),
     "multilingual": (MULTILINGUAL_MODEL_NAME, MULTILINGUAL_MODEL_URL),
 }
+MODEL_DOWNLOAD_INTEGRITY = {
+    "english": (
+        463_945_051,
+        "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+    ),
+    "multilingual": (
+        475_271_763,
+        "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+    ),
+}
 
 
 def application_dir() -> Path:
@@ -301,6 +311,12 @@ def model_is_complete(config: AppConfig) -> bool:
 
 def model_download_spec(config: AppConfig) -> tuple[str, str]:
     return MODEL_PRESETS.get(config.asr.model_variant, MODEL_PRESETS["english"])
+
+
+def model_download_integrity(config: AppConfig) -> tuple[int, str]:
+    return MODEL_DOWNLOAD_INTEGRITY.get(
+        config.asr.model_variant, MODEL_DOWNLOAD_INTEGRITY["english"]
+    )
 
 
 def default_model_dir(model_variant: str) -> str:

@@ -18,6 +18,7 @@ from captions.config import (
     AppConfig,
     clone_config,
     load_config,
+    model_download_integrity,
     model_download_spec,
     model_is_complete,
     resolve_model_dir,
@@ -679,8 +680,13 @@ class CaptionApplication(QObject):
         self._set_model_status("正在连接")
         thread = QThread(self)
         model_name, model_url = model_download_spec(self.config)
+        expected_size, expected_sha256 = model_download_integrity(self.config)
         worker = ModelDownloadWorker(
-            resolve_model_dir(self.config), model_name=model_name, model_url=model_url
+            resolve_model_dir(self.config),
+            model_name=model_name,
+            model_url=model_url,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)

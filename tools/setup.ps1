@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 & $python -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw 'Unable to update pip' }
-& $python -m pip install -r (Join-Path $projectRoot 'requirements.txt')
+& $python -m pip install -r (Join-Path $projectRoot 'requirements-lock.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Unable to install dependencies' }
 
 Write-Host "Environment ready: $python"
