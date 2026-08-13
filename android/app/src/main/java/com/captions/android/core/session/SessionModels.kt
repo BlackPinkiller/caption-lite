@@ -12,6 +12,11 @@ enum class FontChoice {
     Monospace,
 }
 
+enum class RecognitionEngine {
+    Nemotron,
+    AndroidSystem,
+}
+
 data class AppearanceSettings(
     val displayMode: DisplayMode = DisplayMode.Bilingual,
     val fontChoice: FontChoice = FontChoice.System,
@@ -33,6 +38,7 @@ data class SessionUiState(
     val fontChoice: FontChoice = FontChoice.System,
     val sourceSizeSp: Int = 15,
     val translationSizeSp: Int = 17,
+    val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
     val entries: List<SessionEntry> = emptyList(),
     val message: String = "",
 )

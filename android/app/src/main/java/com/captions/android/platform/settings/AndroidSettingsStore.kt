@@ -4,6 +4,7 @@ import android.content.Context
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
+import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.ports.SettingsStore
 
 class AndroidSettingsStore(context: Context) : SettingsStore {
@@ -31,6 +32,15 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
             .apply()
     }
 
+    override fun loadRecognitionEngine(): RecognitionEngine = enumValue(
+        preferences.getString(KEY_RECOGNITION_ENGINE, null),
+        RecognitionEngine.Nemotron,
+    )
+
+    override fun saveRecognitionEngine(engine: RecognitionEngine) {
+        preferences.edit().putString(KEY_RECOGNITION_ENGINE, engine.name).apply()
+    }
+
     private inline fun <reified T : Enum<T>> enumValue(value: String?, fallback: T): T =
         value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: fallback
 
@@ -39,5 +49,6 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_FONT_CHOICE = "font_choice"
         const val KEY_SOURCE_SIZE = "source_size"
         const val KEY_TRANSLATION_SIZE = "translation_size"
+        const val KEY_RECOGNITION_ENGINE = "recognition_engine"
     }
 }

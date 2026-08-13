@@ -12,6 +12,7 @@ cd android
 需要从空生成目录验证时使用 `./tools/build-wsl.sh --clean`。
 
 首次设置会把 Gradle 缓存和 Android SDK 放在 WSL 用户目录；仓库只保留 Wrapper 和源码。
+`sherpa-onnx` 的官方 Android AAR 由设置脚本校验后下载，不提交二进制依赖。
 
 主要边界：
 

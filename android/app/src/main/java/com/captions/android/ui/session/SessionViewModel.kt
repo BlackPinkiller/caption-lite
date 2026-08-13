@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
+import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.SessionTimeline
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.ports.SettingsStore
@@ -21,6 +22,7 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
                 fontChoice = it.fontChoice,
                 sourceSizeSp = it.sourceSizeSp,
                 translationSizeSp = it.translationSizeSp,
+                recognitionEngine = settingsStore.loadRecognitionEngine(),
             )
         },
     )
@@ -64,6 +66,11 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
     fun setTranslationSize(sizeSp: Int) {
         mutableState.value = mutableState.value.copy(translationSizeSp = sizeSp.coerceIn(12, 40))
         saveAppearance()
+    }
+
+    fun setRecognitionEngine(engine: RecognitionEngine) {
+        mutableState.value = mutableState.value.copy(recognitionEngine = engine, message = "")
+        settingsStore.saveRecognitionEngine(engine)
     }
 
     fun showMessage(message: String) {

@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Box
 import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.audio.AndroidMicrophoneInput
+import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private val sessionController by lazy {
         AndroidSessionController(AndroidMicrophoneInput(), sessionViewModel)
     }
+    private val modelManager by lazy { AndroidNemotronModelManager(applicationContext) }
 
     private val microphonePermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -52,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by sessionViewModel.state.collectAsStateWithLifecycle()
+            val modelState by modelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             BackHandler(enabled = settingsOpen) { settingsOpen = false }
             CaptionsTheme {
@@ -85,6 +88,9 @@ class MainActivity : ComponentActivity() {
                     if (settingsOpen) {
                         SettingsPanel(
                             state = state,
+                            modelState = modelState,
+                            onRecognitionEngineChanged = sessionViewModel::setRecognitionEngine,
+                            onDownloadModel = modelManager::download,
                             onDisplayModeChanged = sessionViewModel::setDisplayMode,
                             onFontChoiceChanged = sessionViewModel::setFontChoice,
                             onSourceSizeChanged = sessionViewModel::setSourceSize,
@@ -108,6 +114,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         sessionController.close()
+        modelManager.close()
         super.onDestroy()
     }
 }

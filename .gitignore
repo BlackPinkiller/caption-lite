@@ -18,4 +18,5 @@ config.json
 /android/local.properties
 /android/**/build/
 /android/.idea/
+/android/app/libs/*.aar
 *.iml

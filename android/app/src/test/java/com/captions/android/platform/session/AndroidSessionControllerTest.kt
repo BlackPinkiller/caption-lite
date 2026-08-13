@@ -1,6 +1,7 @@
 package com.captions.android.platform.session
 
 import com.captions.android.core.session.AppearanceSettings
+import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.SettingsStore
 import com.captions.android.ui.session.SessionViewModel
@@ -57,6 +58,19 @@ class AndroidSessionControllerTest {
         assertEquals("麦克风已关闭", viewModel.state.value.message)
     }
 
+    @Test
+    fun recognitionEngineSelectionPersists() {
+        val settings = MemorySettingsStore()
+        val viewModel = SessionViewModel(settings)
+
+        viewModel.setRecognitionEngine(RecognitionEngine.AndroidSystem)
+
+        assertEquals(
+            RecognitionEngine.AndroidSystem,
+            SessionViewModel(settings).state.value.recognitionEngine,
+        )
+    }
+
     private class FakeAudioInput : AudioInput {
         override var running = false
         var startCount = 0
@@ -79,11 +93,18 @@ class AndroidSessionControllerTest {
 
     private class MemorySettingsStore : SettingsStore {
         private var settings = AppearanceSettings()
+        private var engine = RecognitionEngine.Nemotron
 
         override fun loadAppearance(): AppearanceSettings = settings
 
         override fun saveAppearance(settings: AppearanceSettings) {
             this.settings = settings
+        }
+
+        override fun loadRecognitionEngine(): RecognitionEngine = engine
+
+        override fun saveRecognitionEngine(engine: RecognitionEngine) {
+            this.engine = engine
         }
     }
 }

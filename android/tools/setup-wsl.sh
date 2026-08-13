@@ -10,8 +10,12 @@ readonly gradle_zip="$cache_dir/gradle-$gradle_version-bin.zip"
 readonly gradle_dir="$cache_dir/gradle-$gradle_version"
 readonly command_tools_zip="$cache_dir/commandlinetools-linux-15859902_latest.zip"
 readonly command_tools_sha256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
+readonly sherpa_version="1.13.5"
+readonly sherpa_aar="$project_dir/app/libs/sherpa-onnx-$sherpa_version.aar"
+readonly sherpa_sha256="6419cd8bc983e0c4fab06067f0fe0313fdc0f7103818ac1e7a08d50787b7a82b"
 
 mkdir -p "$cache_dir" "$sdk_dir"
+mkdir -p "$project_dir/app/libs"
 
 download_verified() {
     local url="$1"
@@ -32,6 +36,11 @@ download_verified \
     "https://services.gradle.org/distributions/gradle-$gradle_version-bin.zip" \
     "$gradle_sha256" \
     "$gradle_zip"
+
+download_verified \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpa_version/sherpa-onnx-$sherpa_version.aar" \
+    "$sherpa_sha256" \
+    "$sherpa_aar"
 
 if [[ ! -x "$gradle_dir/bin/gradle" ]]; then
     unzip -q -o "$gradle_zip" -d "$cache_dir"
