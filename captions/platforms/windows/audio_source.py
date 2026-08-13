@@ -6,6 +6,8 @@ from types import TracebackType
 import numpy as np
 import soundcard as sc
 
+from captions.ports.audio_source import AudioCaptureKind
+
 
 def _record_soundcard_samples(recorder, num_frames: int) -> np.ndarray:
     # SoundCard keeps the stream running after a WASAPI discontinuity, but it
@@ -69,7 +71,9 @@ class SoundCardLoopbackCapture:
 
 
 class WindowsSoundCardAudioSource:
-    def open_default_output(
+    capture_kind = AudioCaptureKind.SYSTEM_OUTPUT
+
+    def open_default(
         self,
         *,
         sample_rate: int,

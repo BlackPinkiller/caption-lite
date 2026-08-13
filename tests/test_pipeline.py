@@ -15,6 +15,7 @@ from captions.app import CaptionApplication
 from captions.audio_asr import AudioAsrWorker
 from captions.config import AppConfig
 from captions.core.diagnostics import Diagnostics
+from captions.ports.audio_source import AudioCaptureKind
 from captions.segmenter import Segmenter
 from captions.translation import Translator
 from captions.translation_session import TranslationSession
@@ -120,7 +121,8 @@ class PipelineIntegrationTests(unittest.TestCase):
         worker = AudioAsrWorker(
             config,
             audio_source=SimpleNamespace(
-                open_default_output=lambda **kwargs: Capture()
+                capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+                open_default=lambda **kwargs: Capture(),
             ),
             recognition_backend=SimpleNamespace(
                 create_streaming=lambda current: Recognition(),

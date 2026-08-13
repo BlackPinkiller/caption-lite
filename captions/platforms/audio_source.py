@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import sys
 
-from captions.ports.audio_source import AudioSource
+from captions.ports.audio_source import AudioCaptureKind, AudioSource
 
 
 class UnsupportedAudioSource:
-    def open_default_output(self, **kwargs):
+    capture_kind = AudioCaptureKind.SYSTEM_OUTPUT
+
+    def open_default(self, **kwargs):
         raise RuntimeError("此平台尚未配置系统播放音频采集")
 
 

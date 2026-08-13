@@ -11,7 +11,7 @@ from captions.adapters.sherpa_onnx_recognition import DEFAULT_RECOGNITION_BACKEN
 from captions.config import AppConfig
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
-from captions.ports.audio_source import AudioSource
+from captions.ports.audio_source import AudioCaptureKind, AudioSource
 from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, RecognitionBackend
 
 
@@ -19,6 +19,18 @@ AUDIO_ACTIVITY_THRESHOLD = 0.0001
 VAD_PRE_ROLL_WINDOWS = 16
 CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
+
+
+def capture_status_text(capture_kind: AudioCaptureKind, state: str) -> str:
+    if capture_kind == AudioCaptureKind.MICROPHONE:
+        return {
+            "connecting": "正在连接麦克风…",
+            "reconnecting": "麦克风已变化，正在重连",
+        }[state]
+    return {
+        "connecting": "正在连接系统播放设备…",
+        "reconnecting": "播放设备已变化，正在重连",
+    }[state]
 
 
 def should_commit_endpoint(
@@ -158,8 +170,13 @@ class AudioAsrWorker(QObject):
                         time.sleep(0.1)
                 if self._stop.is_set():
                     break
-                self.status.emit("正在连接系统播放设备…")
-                capture = self.audio_source.open_default_output(
+                self.status.emit(
+                    capture_status_text(
+                        self.audio_source.capture_kind,
+                        "connecting",
+                    )
+                )
+                capture = self.audio_source.open_default(
                     sample_rate=ASR_SAMPLE_RATE,
                     channels=1,
                     block_size=CAPTURE_BUFFER_SIZE,
@@ -231,7 +248,11 @@ class AudioAsrWorker(QObject):
                     recognition.reset()
                     speech_gate.reset()
                     last_text = ""
-                    self.status.emit(f"播放设备已变化，正在重连：{error}")
+                    reconnecting = capture_status_text(
+                        self.audio_source.capture_kind,
+                        "reconnecting",
+                    )
+                    self.status.emit(f"{reconnecting}：{error}")
                     time.sleep(1)
         except Exception as error:
             self.diagnostics.event("asr.error", error=str(error))

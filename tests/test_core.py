@@ -41,6 +41,7 @@ from captions.audio_asr import (
     AudioAsrWorker,
     AutoStandbyDetector,
     VadSpeechGate,
+    capture_status_text,
     should_commit_endpoint,
 )
 from captions.config import (
@@ -69,6 +70,7 @@ from captions.core.prompt_template import (
 )
 from captions.model_download import ModelDownloadWorker
 from captions.platforms.windows.audio_source import _record_soundcard_samples
+from captions.ports.audio_source import AudioCaptureKind
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
 from captions.translation import (
@@ -1091,6 +1093,24 @@ class TaskSessionCleanupTests(unittest.TestCase):
 
 
 class AudioAsrTests(unittest.TestCase):
+    def test_capture_status_matches_the_platform_input_kind(self) -> None:
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.SYSTEM_OUTPUT, "connecting"),
+            "正在连接系统播放设备…",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.MICROPHONE, "connecting"),
+            "正在连接麦克风…",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.SYSTEM_OUTPUT, "reconnecting"),
+            "播放设备已变化，正在重连",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.MICROPHONE, "reconnecting"),
+            "麦克风已变化，正在重连",
+        )
+
     def test_asr_endpoint_commits_an_extremely_short_sentence(self) -> None:
         self.assertTrue(
             should_commit_endpoint(
@@ -1169,7 +1189,8 @@ class AudioAsrTests(unittest.TestCase):
             create_vad=lambda current: object(),
         )
         audio_source = SimpleNamespace(
-            open_default_output=lambda **kwargs: Capture()
+            capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+            open_default=lambda **kwargs: Capture(),
         )
         worker = AudioAsrWorker(
             config,
