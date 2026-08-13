@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Box
 import com.captions.android.platform.session.AndroidScreenAwakeController
+import com.captions.android.platform.service.CaptionSessionService
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
@@ -25,6 +26,7 @@ import com.captions.android.ui.theme.CaptionsTheme
 
 class MainActivity : ComponentActivity() {
     private var startAfterMicrophonePermission = false
+    private var startAfterNotificationPermission = false
     private val runtime
         get() = (application as CaptionsApplication).runtime
     private val sessionViewModel: SessionViewModel by viewModels {
@@ -40,12 +42,19 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         if (granted) {
             sessionController.setMicrophoneEnabled(true)
-            if (startAfterMicrophonePermission) sessionController.start()
+            if (startAfterMicrophonePermission) requestNotificationAndStart()
         } else {
             sessionController.setMicrophoneEnabled(false)
             sessionViewModel.showMessage("需要麦克风权限才能识别语音")
         }
         startAfterMicrophonePermission = false
+    }
+
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        if (startAfterNotificationPermission) startSession()
+        startAfterNotificationPermission = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,10 +92,11 @@ class MainActivity : ComponentActivity() {
                         onToggleRunning = {
                             if (state.running) {
                                 sessionController.pause()
+                                CaptionSessionService.stop(this@MainActivity)
                             } else if (!state.microphoneEnabled) {
                                 sessionViewModel.showMessage("请先开启麦克风")
                             } else if (hasMicrophonePermission()) {
-                                sessionController.start()
+                                requestNotificationAndStart()
                             } else {
                                 startAfterMicrophonePermission = true
                                 microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -100,7 +110,10 @@ class MainActivity : ComponentActivity() {
                             modelState = modelState,
                             translationModelState = translationModelState,
                             onRecognitionEngineChanged = {
-                                if (state.running || state.starting) sessionController.pause()
+                                if (state.running || state.starting) {
+                                    sessionController.pause()
+                                    CaptionSessionService.stop(this@MainActivity)
+                                }
                                 sessionViewModel.setRecognitionEngine(it)
                             },
                             onDownloadModel = modelManager::download,
@@ -129,6 +142,24 @@ class MainActivity : ComponentActivity() {
     private fun hasMicrophonePermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
+
+    private fun requestNotificationAndStart() {
+        if (hasNotificationPermission()) {
+            startSession()
+        } else {
+            startAfterNotificationPermission = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun hasNotificationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun startSession() {
+        CaptionSessionService.start(this)
+        sessionController.start()
+    }
 
     override fun onDestroy() {
         screenAwakeController.setSessionActive(false)
