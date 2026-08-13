@@ -7,11 +7,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
@@ -19,10 +25,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
-import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
 import com.captions.android.platform.session.AndroidScreenAwakeController
 import com.captions.android.platform.service.CaptionSessionService
-import com.captions.android.ui.settings.SettingsPanel
+import com.captions.android.ui.settings.SettingsScreen
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
 import com.captions.android.ui.theme.CaptionsTheme
@@ -94,38 +100,23 @@ class MainActivity : ComponentActivity() {
                     if (sessionActive) screenAwakeController.setSessionActive(false)
                 }
             }
-            BackHandler(enabled = settingsOpen) { settingsOpen = false }
             CaptionsTheme {
-                Box {
-                    SessionScreen(
-                        state = state,
-                        onToggleMicrophone = {
-                            if (state.microphoneEnabled) {
-                                sessionController.setMicrophoneEnabled(false)
-                            } else if (hasMicrophonePermission()) {
-                                sessionController.setMicrophoneEnabled(true)
-                            } else {
-                                startAfterMicrophonePermission = false
-                                microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        onToggleRunning = {
-                            if (state.running) {
-                                sessionController.pause()
-                                CaptionSessionService.stop(this@MainActivity)
-                            } else if (!state.microphoneEnabled) {
-                                sessionViewModel.showMessage("请先开启麦克风")
-                            } else if (hasMicrophonePermission()) {
-                                requestNotificationAndStart()
-                            } else {
-                                startAfterMicrophonePermission = true
-                                microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        onOpenSettings = { settingsOpen = true },
-                    )
-                    if (settingsOpen) {
-                        SettingsPanel(
+                AnimatedContent(
+                    targetState = settingsOpen,
+                    modifier = Modifier.fillMaxSize(),
+                    transitionSpec = {
+                        if (targetState) {
+                            (slideInHorizontally { it } + fadeIn()) togetherWith
+                                (slideOutHorizontally { -it / 3 } + fadeOut())
+                        } else {
+                            (slideInHorizontally { -it / 3 } + fadeIn()) togetherWith
+                                (slideOutHorizontally { it } + fadeOut())
+                        }
+                    },
+                    label = "main-settings-navigation",
+                ) { showSettings ->
+                    if (showSettings) {
+                        SettingsScreen(
                             state = state,
                             modelState = modelState,
                             translationModelState = translationModelState,
@@ -150,6 +141,34 @@ class MainActivity : ComponentActivity() {
                             onOverlayBackgroundChanged = sessionViewModel::setOverlayBackgroundEnabled,
                             onOverlayPositionChanged = sessionViewModel::setOverlayPosition,
                             onDismiss = { settingsOpen = false },
+                        )
+                    } else {
+                        SessionScreen(
+                            state = state,
+                            onToggleMicrophone = {
+                                if (state.microphoneEnabled) {
+                                    sessionController.setMicrophoneEnabled(false)
+                                } else if (hasMicrophonePermission()) {
+                                    sessionController.setMicrophoneEnabled(true)
+                                } else {
+                                    startAfterMicrophonePermission = false
+                                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            onToggleRunning = {
+                                if (state.running) {
+                                    sessionController.pause()
+                                    CaptionSessionService.stop(this@MainActivity)
+                                } else if (!state.microphoneEnabled) {
+                                    sessionViewModel.showMessage("请先开启麦克风")
+                                } else if (hasMicrophonePermission()) {
+                                    requestNotificationAndStart()
+                                } else {
+                                    startAfterMicrophonePermission = true
+                                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            onOpenSettings = { settingsOpen = true },
                         )
                     }
                 }
