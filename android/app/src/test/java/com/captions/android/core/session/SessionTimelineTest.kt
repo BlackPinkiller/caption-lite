@@ -39,4 +39,16 @@ class SessionTimelineTest {
         assertEquals("translation", timeline.entries.single().translation)
         assertFalse(timeline.updateTranslation(99, "missing"))
     }
+
+    @Test
+    fun laterPartialsKeepTheCurrentPreviewTranslation() {
+        val timeline = SessionTimeline()
+        timeline.updateCurrent(1, "hello")
+        timeline.updateTranslation(1, "你好")
+
+        timeline.updateCurrent(1, "hello world")
+
+        assertEquals("hello world", timeline.entries.single().source)
+        assertEquals("你好", timeline.entries.single().translation)
+    }
 }

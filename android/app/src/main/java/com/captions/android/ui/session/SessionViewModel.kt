@@ -93,7 +93,7 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
         mutableState.value = mutableState.value.copy(message = message.trim())
     }
 
-    fun updateCurrent(cueId: Long, source: String, translation: String = "") {
+    fun updateCurrent(cueId: Long, source: String, translation: String? = null) {
         timeline.updateCurrent(cueId, source, translation)
         publishTimeline()
     }

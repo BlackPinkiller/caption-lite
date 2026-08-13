@@ -20,7 +20,7 @@ import androidx.compose.foundation.layout.Box
 import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.audio.AndroidMicrophoneInput
 import com.captions.android.core.recognition.QueuedRecognitionSession
-import com.captions.android.core.translation.QueuedTranslationSession
+import com.captions.android.core.translation.RealtimeTranslationSession
 import com.captions.android.core.translation.TranslationRouter
 import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
     }
     private val translationSession by lazy {
         val httpClient = UrlConnectionHttpClient()
-        QueuedTranslationSession(
+        RealtimeTranslationSession(
             TranslationRouter(
                 local = GoogleOnDeviceTranslator(translationModelManager),
                 google2 = Google2Translator(httpClient),

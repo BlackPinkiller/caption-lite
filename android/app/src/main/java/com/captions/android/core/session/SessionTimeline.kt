@@ -6,14 +6,16 @@ class SessionTimeline {
     val entries: List<SessionEntry>
         get() = mutableEntries.toList()
 
-    fun updateCurrent(cueId: Long, source: String, translation: String = "") {
+    fun updateCurrent(cueId: Long, source: String, translation: String? = null) {
+        val current = mutableEntries.lastOrNull()
         val next = SessionEntry(
             cueId = cueId,
             source = source.trim(),
-            translation = translation.trim(),
+            translation = translation?.trim()
+                ?: current?.takeIf { it.current && it.cueId == cueId }?.translation.orEmpty(),
             current = true,
         )
-        if (mutableEntries.lastOrNull()?.current == true) {
+        if (current?.current == true) {
             mutableEntries[mutableEntries.lastIndex] = next
         } else {
             mutableEntries += next

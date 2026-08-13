@@ -1,6 +1,7 @@
 package com.captions.android.platform.session
 
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionController
@@ -89,33 +90,53 @@ class AndroidSessionController(
         if (update.text.isNotEmpty()) {
             viewModel.updateCurrent(cueId, update.text)
         }
+        val currentCueId = cueId
+        val source = viewModel.state.value.entries
+            .lastOrNull { it.cueId == currentCueId }
+            ?.source
+            .orEmpty()
+        val translationSettings = viewModel.state.value.translationSettings
         if (update.endpoint) {
             viewModel.commitCurrent()
-            val currentCueId = cueId
-            val source = viewModel.state.value.entries.lastOrNull { it.cueId == currentCueId }?.source.orEmpty()
-            val translationSettings = viewModel.state.value.translationSettings
-            if (translationSettings.enabled && source.isNotBlank()) {
-                val context = viewModel.state.value.entries
-                    .asSequence()
-                    .filter { it.cueId != currentCueId && it.source.isNotBlank() }
-                    .map { it.source }
-                    .toList()
-                    .takeLast(translationSettings.contextSegments)
-                val accepted = translationSession?.submit(
-                    cueId = currentCueId,
-                    text = source,
-                    context = context,
-                    settings = translationSettings,
-                    onResult = viewModel::updateTranslation,
-                    onError = viewModel::showMessage,
-                ) ?: false
-                if (!accepted && translationSession != null) {
-                    viewModel.showMessage("翻译任务过多，请稍后")
-                }
-            }
+            requestFinalTranslation(currentCueId, source, translationSettings)
             cueId += 1
+        } else if (translationSettings.enabled && source.isNotBlank()) {
+            translationSession?.preview(
+                cueId = currentCueId,
+                text = source,
+                context = translationContext(currentCueId, translationSettings.contextSegments),
+                settings = translationSettings,
+                onResult = viewModel::updateTranslation,
+            )
         }
     }
+
+    private fun requestFinalTranslation(
+        currentCueId: Long,
+        source: String,
+        settings: TranslationSettings,
+    ) {
+        if (!settings.enabled || source.isBlank()) return
+        val accepted = translationSession?.commit(
+            cueId = currentCueId,
+            text = source,
+            context = translationContext(currentCueId, settings.contextSegments),
+            settings = settings,
+            onResult = viewModel::updateTranslation,
+            onError = viewModel::showMessage,
+        ) ?: false
+        if (!accepted && translationSession != null) {
+            viewModel.showMessage("翻译任务过多，请稍后")
+        }
+    }
+
+    private fun translationContext(currentCueId: Long, limit: Int): List<String> =
+        viewModel.state.value.entries
+            .asSequence()
+            .filter { it.cueId != currentCueId && it.source.isNotBlank() }
+            .map { it.source }
+            .toList()
+            .takeLast(limit)
 
     private fun onRecognitionError(message: String) {
         startRequested.set(false)
@@ -131,8 +152,14 @@ class AndroidSessionController(
         audioInput.stop()
         recognitionSession?.stop()
         systemRecognitionSession?.stop()
-        if (viewModel.state.value.entries.lastOrNull()?.current == true) {
+        val current = viewModel.state.value.entries.lastOrNull()?.takeIf { it.current }
+        if (current != null) {
             viewModel.commitCurrent()
+            requestFinalTranslation(
+                current.cueId,
+                current.source,
+                viewModel.state.value.translationSettings,
+            )
             cueId += 1
         }
         viewModel.pause()

@@ -13,7 +13,15 @@ fun interface TextTranslator {
 }
 
 interface TranslationSession : AutoCloseable {
-    fun submit(
+    fun preview(
+        cueId: Long,
+        text: String,
+        context: List<String>,
+        settings: TranslationSettings,
+        onResult: (Long, String) -> Unit,
+    ): Boolean
+
+    fun commit(
         cueId: Long,
         text: String,
         context: List<String>,

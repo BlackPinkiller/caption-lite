@@ -140,7 +140,7 @@ class AndroidSessionControllerTest {
     }
 
     @Test
-    fun onlyACompletedCueIsSubmittedForTranslation() {
+    fun partialAndCompletedCueUseTheirSeparateTranslationPaths() {
         val audio = FakeAudioInput()
         val recognition = FakeSampleRecognitionSession()
         val translation = FakeTranslationSession()
@@ -155,12 +155,34 @@ class AndroidSessionControllerTest {
         controller.start()
         recognition.ready()
         recognition.update(RecognitionUpdate("unfinished", endpoint = false))
-        assertEquals(0, translation.submissions.size)
+        assertEquals(listOf(1L to "unfinished"), translation.previews)
 
         recognition.update(RecognitionUpdate("finished sentence", endpoint = true))
-        assertEquals(listOf(1L to "finished sentence"), translation.submissions)
-        translation.complete(1L, "完整译文")
+        assertEquals(listOf(1L to "finished sentence"), translation.commits)
+        translation.completeFinal(1L, "完整译文")
         assertEquals("完整译文", viewModel.state.value.entries.single().translation)
+    }
+
+    @Test
+    fun laterSourcePartialsPreserveTheVisiblePreviewTranslation() {
+        val recognition = FakeSampleRecognitionSession()
+        val translation = FakeTranslationSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+            translationSession = translation,
+        )
+
+        controller.start()
+        recognition.ready()
+        recognition.update(RecognitionUpdate("hello", endpoint = false))
+        translation.completePreview(1L, "你好")
+        recognition.update(RecognitionUpdate("hello world", endpoint = false))
+
+        assertEquals("hello world", viewModel.state.value.entries.single().source)
+        assertEquals("你好", viewModel.state.value.entries.single().translation)
     }
 
     @Test
@@ -242,11 +264,25 @@ class AndroidSessionControllerTest {
     }
 
     private class FakeTranslationSession : TranslationSession {
-        val submissions = mutableListOf<Pair<Long, String>>()
+        val previews = mutableListOf<Pair<Long, String>>()
+        val commits = mutableListOf<Pair<Long, String>>()
         val contexts = mutableListOf<List<String>>()
-        private var resultCallback: (Long, String) -> Unit = { _, _ -> }
+        private var previewResult: (Long, String) -> Unit = { _, _ -> }
+        private var finalResult: (Long, String) -> Unit = { _, _ -> }
 
-        override fun submit(
+        override fun preview(
+            cueId: Long,
+            text: String,
+            context: List<String>,
+            settings: TranslationSettings,
+            onResult: (Long, String) -> Unit,
+        ): Boolean {
+            previews += cueId to text
+            previewResult = onResult
+            return true
+        }
+
+        override fun commit(
             cueId: Long,
             text: String,
             context: List<String>,
@@ -254,15 +290,16 @@ class AndroidSessionControllerTest {
             onResult: (Long, String) -> Unit,
             onError: (String) -> Unit,
         ): Boolean {
-            submissions += cueId to text
+            commits += cueId to text
             contexts += context
-            resultCallback = onResult
+            finalResult = onResult
             return true
         }
 
         override fun cancelPending() = Unit
         override fun close() = Unit
-        fun complete(cueId: Long, text: String) = resultCallback(cueId, text)
+        fun completePreview(cueId: Long, text: String) = previewResult(cueId, text)
+        fun completeFinal(cueId: Long, text: String) = finalResult(cueId, text)
     }
 
     private class MemorySettingsStore : SettingsStore {
