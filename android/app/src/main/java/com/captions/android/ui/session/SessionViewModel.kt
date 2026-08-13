@@ -36,16 +36,25 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
             showMessage("麦克风已关闭")
             return
         }
-        mutableState.value = mutableState.value.copy(running = true, message = "")
+        mutableState.value = mutableState.value.copy(running = true, starting = false, message = "")
+    }
+
+    fun beginStarting(message: String) {
+        mutableState.value = mutableState.value.copy(
+            running = false,
+            starting = true,
+            message = message.trim(),
+        )
     }
 
     fun pause() {
-        mutableState.value = mutableState.value.copy(running = false)
+        mutableState.value = mutableState.value.copy(running = false, starting = false)
     }
 
     fun setMicrophoneEnabled(enabled: Boolean) {
         mutableState.value = mutableState.value.copy(
             microphoneEnabled = enabled,
+            starting = if (enabled) mutableState.value.starting else false,
             message = "",
         )
     }

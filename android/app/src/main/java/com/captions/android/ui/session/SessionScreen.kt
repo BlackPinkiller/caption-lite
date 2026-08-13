@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -212,21 +213,35 @@ private fun SessionControls(
 
             Button(
                 onClick = onToggleRunning,
+                enabled = !state.starting,
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 56.dp),
             ) {
-                Icon(
-                    painter = if (state.running) {
-                        painterResource(R.drawable.ic_pause)
-                    } else {
-                        painterResource(R.drawable.ic_play)
-                    },
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
+                if (state.starting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        painter = if (state.running) {
+                            painterResource(R.drawable.ic_pause)
+                        } else {
+                            painterResource(R.drawable.ic_play)
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 Spacer(Modifier.size(8.dp))
-                Text(if (state.running) "暂停" else "开始")
+                Text(
+                    when {
+                        state.starting -> "准备中"
+                        state.running -> "暂停"
+                        else -> "开始"
+                    },
+                )
             }
         }
     }

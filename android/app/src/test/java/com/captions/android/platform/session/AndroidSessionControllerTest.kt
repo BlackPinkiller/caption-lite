@@ -86,16 +86,36 @@ class AndroidSessionControllerTest {
         controller.start()
         assertEquals(0, audio.startCount)
         assertFalse(viewModel.state.value.running)
+        assertTrue(viewModel.state.value.starting)
 
         recognition.ready()
         assertEquals(1, audio.startCount)
         assertTrue(viewModel.state.value.running)
+        assertFalse(viewModel.state.value.starting)
 
         recognition.update(RecognitionUpdate("hello world", endpoint = false))
         recognition.update(RecognitionUpdate("hello world", endpoint = true))
         assertEquals(1, viewModel.state.value.entries.size)
         assertEquals("hello world", viewModel.state.value.entries.single().source)
         assertFalse(viewModel.state.value.entries.single().current)
+    }
+
+    @Test
+    fun disablingTheMicrophoneCancelsAStartingSession() {
+        val recognition = FakeSampleRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+        )
+
+        controller.start()
+        assertTrue(viewModel.state.value.starting)
+        controller.setMicrophoneEnabled(false)
+
+        assertFalse(viewModel.state.value.starting)
+        assertFalse(viewModel.state.value.running)
     }
 
     @Test

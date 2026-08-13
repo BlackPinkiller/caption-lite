@@ -55,6 +55,7 @@ data class SessionEntry(
 
 data class SessionUiState(
     val running: Boolean = false,
+    val starting: Boolean = false,
     val microphoneEnabled: Boolean = true,
     val displayMode: DisplayMode = DisplayMode.Bilingual,
     val fontChoice: FontChoice = FontChoice.System,

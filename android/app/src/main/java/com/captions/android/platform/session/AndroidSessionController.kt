@@ -39,7 +39,7 @@ class AndroidSessionController(
 
     private fun startRecognition() {
         if (!startRequested.compareAndSet(false, true)) return
-        viewModel.showMessage("正在加载模型")
+        viewModel.beginStarting("正在加载模型")
         recognitionSession?.start(
             onReady = {
                 if (startRequested.get()) startAudioCapture()
@@ -56,7 +56,7 @@ class AndroidSessionController(
             return
         }
         if (!startRequested.compareAndSet(false, true)) return
-        viewModel.showMessage("正在启动系统识别")
+        viewModel.beginStarting("正在启动系统识别")
         session.start(
             onReady = {
                 if (startRequested.get()) viewModel.start()

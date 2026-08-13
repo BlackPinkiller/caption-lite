@@ -94,10 +94,11 @@ class MainActivity : ComponentActivity() {
             val modelState by modelManager.state.collectAsStateWithLifecycle()
             val translationModelState by translationModelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
-            DisposableEffect(state.running) {
-                screenAwakeController.setSessionActive(state.running)
+            val sessionActive = state.running || state.starting
+            DisposableEffect(sessionActive) {
+                screenAwakeController.setSessionActive(sessionActive)
                 onDispose {
-                    if (state.running) screenAwakeController.setSessionActive(false)
+                    if (sessionActive) screenAwakeController.setSessionActive(false)
                 }
             }
             BackHandler(enabled = settingsOpen) { settingsOpen = false }
@@ -135,7 +136,7 @@ class MainActivity : ComponentActivity() {
                             modelState = modelState,
                             translationModelState = translationModelState,
                             onRecognitionEngineChanged = {
-                                if (state.running) sessionController.pause()
+                                if (state.running || state.starting) sessionController.pause()
                                 sessionViewModel.setRecognitionEngine(it)
                             },
                             onDownloadModel = modelManager::download,
