@@ -8,12 +8,12 @@ import com.captions.android.ports.RecognitionController
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.SampleRecognitionSession
 import com.captions.android.ports.TranslationSession
-import com.captions.android.ui.session.SessionViewModel
+import com.captions.android.ports.SessionStateController
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AndroidSessionController(
     private val audioInput: AudioInput,
-    private val viewModel: SessionViewModel,
+    private val viewModel: SessionStateController,
     private val recognitionSession: SampleRecognitionSession? = null,
     private val systemRecognitionSession: DirectRecognitionSession? = null,
     private val translationSession: TranslationSession? = null,

@@ -41,7 +41,11 @@ import com.captions.android.ui.theme.CaptionsTheme
 class MainActivity : ComponentActivity() {
     private var startAfterMicrophonePermission = false
     private val sessionViewModel: SessionViewModel by viewModels {
-        SessionViewModel.Factory(AndroidSettingsStore(applicationContext))
+        SessionViewModel.Factory(
+            com.captions.android.core.session.SessionStore(
+                AndroidSettingsStore(applicationContext),
+            ),
+        )
     }
     private val sessionController by lazy {
         AndroidSessionController(
