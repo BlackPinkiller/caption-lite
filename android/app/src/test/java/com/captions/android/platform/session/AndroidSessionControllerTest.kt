@@ -3,6 +3,9 @@ package com.captions.android.platform.session
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.ports.AudioInput
+import com.captions.android.ports.DirectRecognitionSession
+import com.captions.android.ports.RecognitionUpdate
+import com.captions.android.ports.SampleRecognitionSession
 import com.captions.android.ports.SettingsStore
 import com.captions.android.ui.session.SessionViewModel
 import org.junit.Assert.assertEquals
@@ -71,6 +74,49 @@ class AndroidSessionControllerTest {
         )
     }
 
+    @Test
+    fun localRecognitionLoadsBeforeMicrophoneCaptureAndPublishesOneCue() {
+        val audio = FakeAudioInput()
+        val recognition = FakeSampleRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(audio, viewModel, recognition)
+
+        controller.start()
+        assertEquals(0, audio.startCount)
+        assertFalse(viewModel.state.value.running)
+
+        recognition.ready()
+        assertEquals(1, audio.startCount)
+        assertTrue(viewModel.state.value.running)
+
+        recognition.update(RecognitionUpdate("hello world", endpoint = false))
+        recognition.update(RecognitionUpdate("hello world", endpoint = true))
+        assertEquals(1, viewModel.state.value.entries.size)
+        assertEquals("hello world", viewModel.state.value.entries.single().source)
+        assertFalse(viewModel.state.value.entries.single().current)
+    }
+
+    @Test
+    fun systemRecognitionDoesNotOpenTheAppAudioInput() {
+        val audio = FakeAudioInput()
+        val system = FakeDirectRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore()).apply {
+            setRecognitionEngine(RecognitionEngine.AndroidSystem)
+        }
+        val controller = AndroidSessionController(
+            audioInput = audio,
+            viewModel = viewModel,
+            systemRecognitionSession = system,
+        )
+
+        controller.start()
+        system.ready()
+
+        assertEquals(0, audio.startCount)
+        assertEquals(1, system.startCount)
+        assertTrue(viewModel.state.value.running)
+    }
+
     private class FakeAudioInput : AudioInput {
         override var running = false
         var startCount = 0
@@ -89,6 +135,44 @@ class AndroidSessionControllerTest {
         }
 
         fun fail(message: String) = errorCallback(message)
+    }
+
+    private class FakeSampleRecognitionSession : SampleRecognitionSession {
+        private var readyCallback: () -> Unit = {}
+        private var updateCallback: (RecognitionUpdate) -> Unit = {}
+
+        override fun start(
+            onReady: () -> Unit,
+            onUpdate: (RecognitionUpdate) -> Unit,
+            onError: (String) -> Unit,
+        ) {
+            readyCallback = onReady
+            updateCallback = onUpdate
+        }
+
+        override fun accept(samples: ShortArray): Boolean = true
+        override fun stop() = Unit
+        override fun close() = Unit
+        fun ready() = readyCallback()
+        fun update(update: RecognitionUpdate) = updateCallback(update)
+    }
+
+    private class FakeDirectRecognitionSession : DirectRecognitionSession {
+        var startCount = 0
+        private var readyCallback: () -> Unit = {}
+
+        override fun start(
+            onReady: () -> Unit,
+            onUpdate: (RecognitionUpdate) -> Unit,
+            onError: (String) -> Unit,
+        ) {
+            startCount += 1
+            readyCallback = onReady
+        }
+
+        override fun stop() = Unit
+        override fun close() = Unit
+        fun ready() = readyCallback()
     }
 
     private class MemorySettingsStore : SettingsStore {

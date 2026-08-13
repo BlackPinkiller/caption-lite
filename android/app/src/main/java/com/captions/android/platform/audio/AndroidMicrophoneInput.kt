@@ -64,7 +64,9 @@ class AndroidMicrophoneInput : AudioInput {
         }
 
         runCatching { currentRecorder?.stop() }
-        currentWorker?.join(STOP_JOIN_MILLIS)
+        if (currentWorker !== Thread.currentThread()) {
+            currentWorker?.join(STOP_JOIN_MILLIS)
+        }
         runCatching { currentRecorder?.release() }
         synchronized(stateLock) {
             if (recorder === currentRecorder) recorder = null

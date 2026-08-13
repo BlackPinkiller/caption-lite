@@ -18,7 +18,10 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Box
 import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.audio.AndroidMicrophoneInput
+import com.captions.android.core.recognition.QueuedRecognitionSession
 import com.captions.android.platform.model.AndroidNemotronModelManager
+import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
+import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
 import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
@@ -31,7 +34,14 @@ class MainActivity : ComponentActivity() {
         SessionViewModel.Factory(AndroidSettingsStore(applicationContext))
     }
     private val sessionController by lazy {
-        AndroidSessionController(AndroidMicrophoneInput(), sessionViewModel)
+        AndroidSessionController(
+            audioInput = AndroidMicrophoneInput(),
+            viewModel = sessionViewModel,
+            recognitionSession = QueuedRecognitionSession(
+                SherpaNemotronRecognitionFactory(modelManager::modelDirectory),
+            ),
+            systemRecognitionSession = AndroidSystemRecognitionSession(applicationContext),
+        )
     }
     private val modelManager by lazy { AndroidNemotronModelManager(applicationContext) }
 
@@ -89,7 +99,10 @@ class MainActivity : ComponentActivity() {
                         SettingsPanel(
                             state = state,
                             modelState = modelState,
-                            onRecognitionEngineChanged = sessionViewModel::setRecognitionEngine,
+                            onRecognitionEngineChanged = {
+                                if (state.running) sessionController.pause()
+                                sessionViewModel.setRecognitionEngine(it)
+                            },
                             onDownloadModel = modelManager::download,
                             onDisplayModeChanged = sessionViewModel::setDisplayMode,
                             onFontChoiceChanged = sessionViewModel::setFontChoice,
