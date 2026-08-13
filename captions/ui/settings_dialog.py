@@ -4,7 +4,12 @@ import copy
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QRect, QSize, QSignalBlocker, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -22,10 +27,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QStyle,
+    QStyleOptionGroupBox,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTabWidget,
@@ -49,6 +57,10 @@ from captions.config import (
     subtitle_custom_style,
     subtitle_style_values,
 )
+from captions.core.prompt_template import (
+    DEFAULT_LLM_PROMPT_TEMPLATE,
+    PROMPT_PLACEHOLDER_PATTERN,
+)
 from captions.ui.caption_canvas import CaptionCanvas
 
 
@@ -57,6 +69,128 @@ ADD_LLM_PROVIDER = "add_llm_provider"
 BACKEND_DELETE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 BACKEND_SEPARATOR_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 BACKEND_DELETE_WIDTH = 32
+
+
+class PromptTemplateHighlighter(QSyntaxHighlighter):
+    def __init__(self, document, palette) -> None:
+        super().__init__(document)
+        self.placeholder_format = QTextCharFormat()
+        self.placeholder_format.setForeground(palette.highlight().color())
+        self.placeholder_format.setFontWeight(QFont.Weight.DemiBold)
+
+    def set_enabled_palette(self, enabled: bool, palette) -> None:
+        color = palette.highlight().color() if enabled else palette.mid().color()
+        self.placeholder_format.setForeground(color)
+        self.rehighlight()
+
+    def highlightBlock(self, text: str) -> None:
+        for match in PROMPT_PLACEHOLDER_PATTERN.finditer(text):
+            self.setFormat(
+                match.start(),
+                match.end() - match.start(),
+                self.placeholder_format,
+            )
+
+
+class PromptTemplateEdit(QPlainTextEdit):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(
+            "QPlainTextEdit { color:palette(text); background-color:palette(base); }"
+            "QPlainTextEdit:disabled { color:palette(mid); }"
+        )
+        self.highlighter = PromptTemplateHighlighter(
+            self.document(),
+            self.palette(),
+        )
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange and hasattr(self, "highlighter"):
+            self.highlighter.set_enabled_palette(self.isEnabled(), self.palette())
+
+
+class TitleActionGroupBox(QGroupBox):
+    actionTriggered = Signal()
+    actionToggled = Signal(bool)
+
+    def __init__(
+        self,
+        title: str,
+        action_text: str,
+        parent=None,
+        *,
+        unchecked_action_text: str = "",
+    ) -> None:
+        super().__init__(title, parent)
+        self._checked_action_text = action_text
+        self._unchecked_action_text = unchecked_action_text
+        self.action_button = QToolButton(self)
+        self.action_button.setText(action_text)
+        self.action_button.setAutoRaise(True)
+        self.action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        if unchecked_action_text:
+            self.action_button.setCheckable(True)
+            self.action_button.setChecked(True)
+            self.action_button.setStyleSheet(
+                "QToolButton { border:0; padding:0; margin:0; "
+                "background:palette(window); }"
+                "QToolButton:checked { color:palette(text); }"
+                "QToolButton:!checked { color:palette(text); }"
+                "QToolButton:hover { color:palette(highlight); }"
+            )
+            self.action_button.toggled.connect(self._action_toggled)
+        else:
+            self.action_button.setStyleSheet(
+                "QToolButton { border:0; padding:0; margin:0; "
+                "background:palette(window); color:palette(text); }"
+                "QToolButton:hover { color:palette(highlight); }"
+            )
+            self.action_button.clicked.connect(self.actionTriggered)
+
+    def set_content_enabled(self, enabled: bool) -> None:
+        layout = self.layout()
+        if layout is None:
+            return
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if widget is not None:
+                widget.setEnabled(enabled)
+
+    def _action_toggled(self, checked: bool) -> None:
+        self.action_button.setText(
+            self._checked_action_text if checked else self._unchecked_action_text
+        )
+        self._position_action()
+        self.actionToggled.emit(checked)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_action()
+
+    def _position_action(self) -> None:
+        option = QStyleOptionGroupBox()
+        self.initStyleOption(option)
+        title_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_GroupBox,
+            option,
+            QStyle.SubControl.SC_GroupBoxLabel,
+            self,
+        )
+        title_width = self.fontMetrics().horizontalAdvance(self.title())
+        title_gap = max(0, title_rect.width() - title_width)
+        text_width = self.action_button.fontMetrics().horizontalAdvance(
+            self.action_button.text()
+        )
+        width = text_width + title_gap
+        height = max(title_rect.height(), self.action_button.fontMetrics().height())
+        self.action_button.setGeometry(
+            max(0, self.width() - width - 12),
+            title_rect.y(),
+            width,
+            height,
+        )
+
 
 ASR_LANGUAGE_LABELS = {
     "auto": "自动检测",
@@ -433,6 +567,7 @@ class SettingsDialog(QDialog):
         controls_layout = QVBoxLayout(controls)
 
         language_group = QGroupBox("翻译语言")
+        self.translation_language_group = language_group
         language_form = QFormLayout(language_group)
         self.source_lang = WheelSafeComboBox()
         for label, code in (
@@ -470,7 +605,13 @@ class SettingsDialog(QDialog):
         language_form.addRow("目标语言", self.target_lang)
         controls_layout.addWidget(language_group)
 
-        service_group = QGroupBox("翻译服务")
+        service_group = TitleActionGroupBox(
+            "翻译服务",
+            "已开启",
+            unchecked_action_text="已关闭",
+        )
+        self.translation_service_group = service_group
+        self.translation_enabled = service_group.action_button
         service_form = QFormLayout(service_group)
         self.backend = BackendComboBox()
         self.backend.delete_requested.connect(self._delete_llm_provider)
@@ -548,17 +689,6 @@ class SettingsDialog(QDialog):
         self.llm_name.textChanged.connect(self._update_llm_provider_name)
         controls_layout.addWidget(service_group)
 
-        self.preference_group = QGroupBox("翻译表达")
-        form = QFormLayout(self.preference_group)
-        self.preference = QTextEdit()
-        self.preference.setPlaceholderText("例如：人名保留英文；语气自然简洁")
-        self.preference.setMaximumHeight(90)
-        form.addRow("翻译偏好", self.preference)
-        preference_note = QLabel("翻译偏好与术语表由 LLM 后端使用。")
-        preference_note.setStyleSheet("color:#777")
-        form.addRow("", preference_note)
-        controls_layout.addWidget(self.preference_group)
-
         advanced = ExpandableSection("高级翻译设置")
         self.translation_advanced = advanced
         request_group = QGroupBox("请求")
@@ -580,6 +710,23 @@ class SettingsDialog(QDialog):
         self.context_chars.setSuffix(" 字符")
         context_form.addRow("字符上限", self.context_chars)
         advanced.addWidget(self.context_group)
+        self.prompt_group = TitleActionGroupBox("LLM 提示词", "恢复默认")
+        prompt_layout = QVBoxLayout(self.prompt_group)
+        self.reset_prompt_button = self.prompt_group.action_button
+        self.reset_prompt_button.setToolTip("恢复内置提示词模板")
+        self.prompt_group.actionTriggered.connect(self._restore_default_prompt)
+        self.prompt_template = PromptTemplateEdit()
+        self.prompt_template.setMinimumHeight(180)
+        self.prompt_template.setMaximumHeight(260)
+        self.prompt_template.setToolTip(
+            "可用占位符：{src} 源语言；{dst} 目标语言；{ctx} 上下文；"
+            "{terms} 术语；{text} 当前文本。必须保留 {text}。"
+        )
+        prompt_layout.addWidget(self.prompt_template)
+        advanced.addWidget(self.prompt_group)
+        self.translation_service_group.actionToggled.connect(
+            self._update_translation_enabled
+        )
         controls_layout.addWidget(advanced)
         controls_layout.addStretch(1)
         scroll.setWidget(controls)
@@ -828,7 +975,9 @@ class SettingsDialog(QDialog):
         self.preview_min_chars.setValue(config.segmentation.preview_min_chars)
         self.preview_interval.setValue(config.segmentation.preview_interval_ms)
         self.preview_char_delta.setValue(config.segmentation.preview_char_delta)
-        self.preference.setPlainText(config.translation.preference)
+        self.prompt_template.setPlainText(config.translation.prompt_template)
+        self.translation_enabled.setChecked(config.translation.enabled)
+        self._update_translation_enabled(config.translation.enabled)
         self._select(self.mode, config.subtitle.mode)
         self.max_sentences.setValue(config.subtitle.max_sentences)
         appearance_theme = config.subtitle.theme
@@ -855,6 +1004,15 @@ class SettingsDialog(QDialog):
     def set_google2_api_key(self, key: str) -> None:
         if not self.google2_api_key.text().strip():
             self.google2_api_key.setText(key)
+
+    def _restore_default_prompt(self) -> None:
+        self.prompt_template.setPlainText(DEFAULT_LLM_PROMPT_TEMPLATE)
+        self.prompt_template.setFocus()
+
+    def _update_translation_enabled(self, enabled: bool) -> None:
+        self.translation_language_group.setEnabled(enabled)
+        self.translation_service_group.set_content_enabled(enabled)
+        self.translation_advanced.setEnabled(enabled)
 
     def set_model_status(self, text: str, downloadable: bool = False) -> None:
         self.model_status.setText(
@@ -931,7 +1089,11 @@ class SettingsDialog(QDialog):
         config.segmentation.preview_min_chars = self.preview_min_chars.value()
         config.segmentation.preview_interval_ms = self.preview_interval.value()
         config.segmentation.preview_char_delta = self.preview_char_delta.value()
-        config.translation.preference = self.preference.toPlainText().strip()
+        config.translation.prompt_template = (
+            self.prompt_template.toPlainText().strip()
+            or DEFAULT_LLM_PROMPT_TEMPLATE
+        )
+        config.translation.enabled = self.translation_enabled.isChecked()
         terms: dict[str, str] = {}
         for line in self.glossary.toPlainText().splitlines():
             if "=" in line:
@@ -1067,7 +1229,7 @@ class SettingsDialog(QDialog):
         elif selected == "deepl":
             self._current_llm_provider_id = None
             self.backend_options.setCurrentIndex(2)
-        self.preference_group.setVisible(llama)
+        self.prompt_group.setVisible(llama)
         self.context_group.setVisible(llama)
         self.set_translation_test_status("")
 
@@ -1155,7 +1317,7 @@ class SettingsDialog(QDialog):
         self._populate_backend_options("llama", provider.id)
         self._load_llm_provider(provider.id)
         self.backend_options.setCurrentIndex(0)
-        self.preference_group.setVisible(True)
+        self.prompt_group.setVisible(True)
         self.context_group.setVisible(True)
         self.set_translation_test_status("")
         self.llm_name.setFocus()

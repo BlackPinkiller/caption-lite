@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -39,6 +41,11 @@ class OverlayWindow(QWidget):
     def set_mode(self, mode: str) -> None:
         self.config.subtitle.mode = mode
         self.canvas.set_style(self.config.subtitle)
+
+    def set_display_mode(self, mode: str) -> None:
+        style = copy.copy(self.config.subtitle)
+        style.mode = mode
+        self.canvas.set_style(style)
 
     def set_locked(self, locked: bool) -> None:
         self.config.window.locked = locked

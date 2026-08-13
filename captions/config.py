@@ -8,6 +8,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from captions.core.prompt_template import (
+    DEFAULT_LLM_PROMPT_TEMPLATE,
+    normalize_prompt_template_placeholders,
+    prompt_template_with_preference,
+)
 from captions.platforms.portable_paths import DEFAULT_APP_PATHS
 from captions.platforms.secret_store import DEFAULT_SECRET_STORE
 from captions.ports.app_paths import AppPaths
@@ -173,6 +178,7 @@ def default_llm_providers() -> list[LlmProviderConfig]:
 
 @dataclass
 class TranslationConfig:
+    enabled: bool = True
     backend: str = "llama"
     source_lang: str = "EN"
     target_lang: str = "ZH-HANS"
@@ -184,7 +190,7 @@ class TranslationConfig:
     timeout_ms: int = 15000
     context_segments: int = 3
     context_chars: int = 1200
-    preference: str = ""
+    prompt_template: str = DEFAULT_LLM_PROMPT_TEMPLATE
     glossary: dict[str, str] = field(default_factory=dict)
 
 
@@ -240,6 +246,11 @@ class HotkeyConfig:
 
 
 @dataclass
+class DebugConfig:
+    enabled: bool = False
+
+
+@dataclass
 class AppConfig:
     asr: AsrConfig = field(default_factory=AsrConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
@@ -247,6 +258,7 @@ class AppConfig:
     subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
+    debug: DebugConfig = field(default_factory=DebugConfig)
 
 
 SUBTITLE_STYLE_FIELDS = (
@@ -515,6 +527,10 @@ def _normalize_config(config: AppConfig) -> None:
     config.translation.context_chars = int(
         _clamp(config.translation.context_chars, 0, 12000)
     )
+    config.translation.prompt_template = normalize_prompt_template_placeholders(
+        config.translation.prompt_template.strip()
+        or DEFAULT_LLM_PROMPT_TEMPLATE
+    )
 
     segmentation = config.segmentation
     segmentation.max_chars = int(_clamp(segmentation.max_chars, 40, 1000))
@@ -583,6 +599,7 @@ def load_config(
             "subtitle",
             "window",
             "hotkey",
+            "debug",
         ):
             values = root.get(section)
             if isinstance(values, dict):
@@ -601,10 +618,19 @@ def load_config(
                         if isinstance(legacy_target, str) and legacy_target:
                             values = {**values, "target_lang": legacy_target}
                     raw_providers = values.get("llm_providers")
+                    if "prompt_template" not in values:
+                        legacy_preference = values.get("preference")
+                        if isinstance(legacy_preference, str):
+                            values = {
+                                **values,
+                                "prompt_template": prompt_template_with_preference(
+                                    legacy_preference
+                                ),
+                            }
                     merge_values = {
                         key: value
                         for key, value in values.items()
-                        if key not in {"llm_providers", "llama_url"}
+                        if key not in {"llm_providers", "llama_url", "preference"}
                     }
                     _merge_dataclass(config.translation, merge_values)
                     if isinstance(raw_providers, list):

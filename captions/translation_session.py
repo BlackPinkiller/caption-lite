@@ -10,6 +10,7 @@ import httpx
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from captions.config import SegmentationConfig, TranslationConfig
+from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.translation import HistoryRecord, Translator
 
 
@@ -32,8 +33,13 @@ class TranslationSession(QObject):
     google2_key_error = Signal(str)
     finished = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        diagnostics: Diagnostics = NULL_DIAGNOSTICS,
+    ) -> None:
         super().__init__(parent)
+        self.diagnostics = diagnostics
         self.translator = Translator()
         self._key_executor = ThreadPoolExecutor(
             max_workers=1,
@@ -48,6 +54,7 @@ class TranslationSession(QObject):
         self._shutdown_timer.setInterval(20)
         self._shutdown_timer.timeout.connect(self._poll_shutdown)
         self.jobs: dict[int, TranslationJob] = {}
+        self._progress_logged: set[int] = set()
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.timeout.connect(self._send_pending_preview)
@@ -78,17 +85,37 @@ class TranslationSession(QObject):
         self._reset_preview_schedule()
         self._discard_preview_jobs()
         self.translator.cancel_pending()
-        generation = self.translator.translate(source, history, config)
-        self.jobs[generation] = TranslationJob(
-            "commit", record_id, source, cue_id
+        job = TranslationJob("commit", record_id, source, cue_id)
+        generation = self.translator.translate(
+            source,
+            history,
+            config,
+            on_registered=lambda value: self._register_job(
+                value,
+                job,
+                backend=config.backend,
+            ),
         )
+        if generation not in self.jobs:
+            self._register_job(generation, job, backend=config.backend)
         return generation
 
     def request_test(self, text: str, config: TranslationConfig) -> int:
         if self._closing:
             return 0
-        generation = self.translator.translate(text, [], config)
-        self.jobs[generation] = TranslationJob("test", None, text, 0)
+        job = TranslationJob("test", None, text, 0)
+        generation = self.translator.translate(
+            text,
+            [],
+            config,
+            on_registered=lambda value: self._register_job(
+                value,
+                job,
+                backend=config.backend,
+            ),
+        )
+        if generation not in self.jobs:
+            self._register_job(generation, job, backend=config.backend)
         return generation
 
     def schedule_preview(
@@ -128,6 +155,14 @@ class TranslationSession(QObject):
     def has_job(self, generation: int) -> bool:
         return generation in self.jobs
 
+    def cancel_all(self) -> None:
+        self._reset_preview_schedule()
+        self.jobs.clear()
+        self._progress_logged.clear()
+        self.translator.cancel_all()
+        self.previews_discarded.emit()
+        self.diagnostics.event("translation.disabled")
+
     def request_google2_key(self) -> None:
         if self._closing:
             return
@@ -157,6 +192,7 @@ class TranslationSession(QObject):
         self._closing = True
         self._reset_preview_schedule()
         self.jobs.clear()
+        self._progress_logged.clear()
         if self._key_future is not None:
             self._key_future.cancel()
         try:
@@ -213,11 +249,37 @@ class TranslationSession(QObject):
         self.preview_timer.stop()
         self.last_preview_text = source
         self.last_preview_sent_at = time.monotonic()
+        job = TranslationJob("preview", None, source, self.pending_cue_id)
         generation = self.translator.translate(
-            source, self.pending_history, config, preview=True
+            source,
+            self.pending_history,
+            config,
+            preview=True,
+            on_registered=lambda value: self._register_job(
+                value,
+                job,
+                backend=config.backend,
+            ),
         )
-        self.jobs[generation] = TranslationJob(
-            "preview", None, source, self.pending_cue_id
+        if generation not in self.jobs:
+            self._register_job(generation, job, backend=config.backend)
+
+    def _register_job(
+        self,
+        generation: int,
+        job: TranslationJob,
+        *,
+        backend: str,
+    ) -> None:
+        self.jobs[generation] = job
+        self.diagnostics.event(
+            "translation.submitted",
+            generation=generation,
+            kind=job.kind,
+            cue_id=job.cue_id,
+            record_id=job.index,
+            backend=backend,
+            source=job.source,
         )
 
     def _reset_preview_schedule(self) -> None:
@@ -231,39 +293,88 @@ class TranslationSession(QObject):
         self.last_preview_sent_at = 0.0
 
     def _discard_preview_jobs(self) -> None:
+        preview_generations = {
+            generation
+            for generation, job in self.jobs.items()
+            if job.kind == "preview"
+        }
         self.jobs = {
             generation: job
             for generation, job in self.jobs.items()
             if job.kind != "preview"
         }
+        self._progress_logged.difference_update(preview_generations)
         self.previews_discarded.emit()
 
     @Slot(int)
     def _started(self, generation: int) -> None:
         job = self.jobs.get(generation)
         if job is not None:
+            self.diagnostics.event(
+                "translation.started",
+                generation=generation,
+                kind=job.kind,
+                cue_id=job.cue_id,
+                record_id=job.index,
+            )
             self.started.emit(generation, job)
 
     @Slot(int, str)
     def _progress(self, generation: int, text: str) -> None:
         job = self.jobs.get(generation)
         if job is not None:
+            if generation not in self._progress_logged:
+                self._progress_logged.add(generation)
+                self.diagnostics.event(
+                    "translation.first_progress",
+                    generation=generation,
+                    kind=job.kind,
+                    cue_id=job.cue_id,
+                    record_id=job.index,
+                    translation=text,
+                )
             self.progress.emit(generation, job, text)
 
     @Slot(int, str)
     def _result(self, generation: int, text: str) -> None:
         job = self.jobs.pop(generation, None)
+        self._progress_logged.discard(generation)
         if job is not None:
+            self.diagnostics.event(
+                "translation.completed",
+                generation=generation,
+                kind=job.kind,
+                cue_id=job.cue_id,
+                record_id=job.index,
+                translation=text,
+            )
             self.result.emit(generation, job, text)
 
     @Slot(int, str)
     def _error(self, generation: int, message: str) -> None:
         job = self.jobs.pop(generation, None)
+        self._progress_logged.discard(generation)
         if job is not None:
+            self.diagnostics.event(
+                "translation.failed",
+                generation=generation,
+                kind=job.kind,
+                cue_id=job.cue_id,
+                record_id=job.index,
+                error=message,
+            )
             self.error.emit(generation, job, message)
 
     @Slot(int)
     def _cancelled(self, generation: int) -> None:
         job = self.jobs.pop(generation, None)
+        self._progress_logged.discard(generation)
         if job is not None:
+            self.diagnostics.event(
+                "translation.cancelled",
+                generation=generation,
+                kind=job.kind,
+                cue_id=job.cue_id,
+                record_id=job.index,
+            )
             self.cancelled.emit(generation, job)

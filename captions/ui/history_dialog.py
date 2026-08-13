@@ -25,6 +25,7 @@ BACKEND_NAMES = {
     "llama": "Llama",
     "google2": "Google",
     "deepl": "DeepL",
+    "off": "仅识别",
 }
 
 
@@ -41,6 +42,7 @@ class HistoryDialog(QDialog):
         self.live_source = ""
         self.live_translation = ""
         self.live_translation_source = ""
+        self.translation_enabled = True
         self.follow_live = True
         self._rebuilding = False
         layout = QVBoxLayout(self)
@@ -217,6 +219,16 @@ class HistoryDialog(QDialog):
         self.set_live(translation=translation)
         self.live_translation_source = source
 
+    def set_translation_enabled(self, enabled: bool) -> None:
+        self.translation_enabled = bool(enabled)
+        if not self.translation_enabled:
+            self.live_translation = ""
+            self.live_translation_source = ""
+        live = self._find_item("live")
+        if live is not None:
+            live.setText(self._live_text())
+            self._reflow_item(live)
+
     def clear(self) -> None:
         self.records.clear()
         self._record_ids.clear()
@@ -290,7 +302,8 @@ class HistoryDialog(QDialog):
 
     def _live_text(self, mode: str | None = None) -> str:
         mode = mode or self.filter.currentData() or "both"
-        parts = ["实时  ·  正在识别与翻译"]
+        state = "正在识别与翻译" if self.translation_enabled else "正在识别"
+        parts = [f"实时  ·  {state}"]
         if mode != "translation" and self.live_source:
             parts.extend(("", self.live_source))
         if mode != "source" and self.live_translation:

@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from captions.adapters.sherpa_onnx_recognition import DEFAULT_RECOGNITION_BACKEND
 from captions.config import AppConfig
+from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
 from captions.ports.audio_source import AudioSource
 from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, RecognitionBackend
@@ -119,11 +120,13 @@ class AudioAsrWorker(QObject):
         *,
         audio_source: AudioSource = DEFAULT_AUDIO_SOURCE,
         recognition_backend: RecognitionBackend = DEFAULT_RECOGNITION_BACKEND,
+        diagnostics: Diagnostics = NULL_DIAGNOSTICS,
     ) -> None:
         super().__init__()
         self.config = config
         self.audio_source = audio_source
         self.recognition_backend = recognition_backend
+        self.diagnostics = diagnostics
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._standby = AutoStandbyDetector(config.asr.auto_standby_seconds)
@@ -139,6 +142,7 @@ class AudioAsrWorker(QObject):
             if self._stop.is_set():
                 return
             self.model_ready.emit()
+            self.diagnostics.event("asr.ready")
             revision = 0
             last_text = ""
             while not self._stop.is_set():
@@ -160,6 +164,7 @@ class AudioAsrWorker(QObject):
                     channels=1,
                     block_size=CAPTURE_BUFFER_SIZE,
                 )
+                self.diagnostics.event("capture.connected", device=capture.name)
                 self.status.emit(f"正在识别：{capture.name}")
                 try:
                     with capture:
@@ -171,6 +176,7 @@ class AudioAsrWorker(QObject):
                             level = float(np.max(np.abs(mono))) if mono.size else 0.0
                             standby_change = self._standby.update(level)
                             if standby_change is True:
+                                self.diagnostics.event("capture.standby_entered")
                                 recognition.reset()
                                 speech_gate.reset()
                                 last_text = ""
@@ -178,6 +184,7 @@ class AudioAsrWorker(QObject):
                                 self.status.emit("自动待机")
                                 continue
                             if standby_change is False:
+                                self.diagnostics.event("capture.standby_left")
                                 speech_gate.reset()
                                 self.auto_standby_changed.emit(False)
                                 self.status.emit(f"正在识别：{capture.name}")
@@ -189,6 +196,11 @@ class AudioAsrWorker(QObject):
                                 if text != last_text:
                                     revision += 1
                                     last_text = text
+                                    self.diagnostics.event(
+                                        "asr.partial",
+                                        revision=revision,
+                                        text=text,
+                                    )
                                     self.partial.emit(text, revision)
                                 commit_endpoint = should_commit_endpoint(
                                     text,
@@ -197,6 +209,12 @@ class AudioAsrWorker(QObject):
                                     silence_min_chars=self._silence_min_chars,
                                 )
                                 if commit_endpoint:
+                                    self.diagnostics.event(
+                                        "asr.endpoint",
+                                        revision=revision,
+                                        reason="asr" if update.endpoint else "vad",
+                                        text=text,
+                                    )
                                     self.endpoint.emit()
                                     recognition.reset()
                                     last_text = ""
@@ -206,14 +224,20 @@ class AudioAsrWorker(QObject):
                 except Exception as error:
                     if self._stop.is_set():
                         break
+                    self.diagnostics.event(
+                        "capture.reconnecting",
+                        error=str(error),
+                    )
                     recognition.reset()
                     speech_gate.reset()
                     last_text = ""
                     self.status.emit(f"播放设备已变化，正在重连：{error}")
                     time.sleep(1)
         except Exception as error:
+            self.diagnostics.event("asr.error", error=str(error))
             self.error.emit(str(error))
         finally:
+            self.diagnostics.event("asr.stopped")
             self.stopped.emit()
 
     def stop(self) -> None:

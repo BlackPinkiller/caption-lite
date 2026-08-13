@@ -21,7 +21,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QScrollArea,
+    QStyle,
+    QStyleOptionGroupBox,
+)
 
 from captions.adapters.sherpa_onnx_recognition import (
     SherpaOnnxRecognitionBackend,
@@ -57,6 +63,10 @@ from captions.config import (
     subtitle_style_values,
 )
 from captions.core.caption_state import CaptionState
+from captions.core.prompt_template import (
+    DEFAULT_LLM_PROMPT_TEMPLATE,
+    PROMPT_PLACEHOLDER_TOKENS,
+)
 from captions.model_download import ModelDownloadWorker
 from captions.platforms.windows.audio_source import _record_soundcard_samples
 from captions.segmenter import Segmenter
@@ -148,6 +158,10 @@ class SegmenterTests(unittest.TestCase):
 
 
 class TranslationTests(unittest.TestCase):
+    def test_default_prompt_exposes_all_supported_placeholders(self) -> None:
+        for token in PROMPT_PLACEHOLDER_TOKENS:
+            self.assertIn(token, DEFAULT_LLM_PROMPT_TEMPLATE)
+
     def test_glossary_is_case_insensitive_and_word_bounded(self) -> None:
         terms = {"Vault": "避难所", "Brotherhood of Steel": "钢铁兄弟会"}
         self.assertEqual(matching_glossary(terms, "Enter the VAULT."), [("Vault", "避难所")])
@@ -167,8 +181,39 @@ class TranslationTests(unittest.TestCase):
 
         prompt = build_hymt_prompt("こんにちは", [], config)
 
-        self.assertIn("日语字幕翻译成英语", prompt)
-        self.assertNotIn("英文字幕翻译成简体中文", prompt)
+        self.assertIn("源语言：日语", prompt)
+        self.assertIn("目标语言：英语", prompt)
+        self.assertNotIn("目标语言：简体中文", prompt)
+
+    def test_custom_prompt_expands_context_glossary_and_current_text(self) -> None:
+        config = AppConfig().translation
+        config.prompt_template = (
+            "{src} → {dst}\n{ctx}\n{terms}\n{text}"
+        )
+        config.glossary = {"Vault": "避难所"}
+        history = [
+            HistoryRecord("12:00:00", "Previous line", "", "llama")
+        ]
+
+        prompt = build_hymt_prompt("Enter the Vault.", history, config)
+
+        self.assertIn("英语 → 简体中文", prompt)
+        self.assertIn("Previous line", prompt)
+        self.assertIn("Vault = 避难所", prompt)
+        self.assertTrue(prompt.endswith("Enter the Vault."))
+
+    def test_prompt_replacement_does_not_expand_tokens_inside_source_text(self) -> None:
+        config = AppConfig().translation
+        config.prompt_template = "{text}"
+
+        self.assertEqual(build_hymt_prompt("{ctx}", [], config), "{ctx}")
+
+    def test_prompt_requires_the_current_text_placeholder(self) -> None:
+        config = AppConfig().translation
+        config.prompt_template = "只翻译成{dst}"
+
+        with self.assertRaisesRegex(ValueError, r"必须包含 \{text\}"):
+            build_hymt_prompt("Hello", [], config)
 
     def test_openai_compatible_provider_sends_optional_model_and_auth(self) -> None:
         config = AppConfig().translation
@@ -721,8 +766,17 @@ class TranslationSessionTests(unittest.TestCase):
         config.segmentation.preview_min_chars = 4
         calls: list[tuple[str, bool]] = []
 
-        def translate(text, history, translation, *, preview=False):
+        def translate(
+            text,
+            history,
+            translation,
+            *,
+            preview=False,
+            on_registered=None,
+        ):
             calls.append((text, preview))
+            if on_registered is not None:
+                on_registered(1)
             return 1
 
         session.translator.translate = translate
@@ -1638,6 +1692,77 @@ class SettingsDialogTests(unittest.TestCase):
         )
         self.assertEqual(dialog.silence_endpoint.value(), 0.4)
         self.assertEqual(dialog.silence_min_chars.value(), 4)
+        self.assertEqual(
+            dialog.prompt_template.toPlainText(),
+            DEFAULT_LLM_PROMPT_TEMPLATE,
+        )
+        self.assertTrue(dialog.translation_enabled.isChecked())
+        self.assertIn("palette(text)", dialog.prompt_template.styleSheet())
+        dialog.prompt_template.highlighter.rehighlight()
+        self.assertTrue(
+            dialog.prompt_template.document().firstBlock().layout().formats()
+        )
+        self.assertEqual(
+            dialog.prompt_template.highlighter.placeholder_format.background().style(),
+            Qt.BrushStyle.NoBrush,
+        )
+        self.assertIs(dialog.prompt_group.parent(), dialog.translation_advanced.body)
+        self.assertIs(dialog.reset_prompt_button.parent(), dialog.prompt_group)
+        self.assertEqual(dialog.prompt_group.layout().count(), 1)
+        for group in (dialog.translation_service_group, dialog.prompt_group):
+            group.resize(600, 240)
+            group._position_action()
+            self.qt_app.processEvents()
+            option = QStyleOptionGroupBox()
+            group.initStyleOption(option)
+            title_rect = group.style().subControlRect(
+                QStyle.ComplexControl.CC_GroupBox,
+                option,
+                QStyle.SubControl.SC_GroupBoxLabel,
+                group,
+            )
+            title_gap = title_rect.width() - group.fontMetrics().horizontalAdvance(
+                group.title()
+            )
+            action_gap = (
+                group.action_button.width()
+                - group.action_button.fontMetrics().horizontalAdvance(
+                    group.action_button.text()
+                )
+            )
+            self.assertEqual(action_gap, title_gap)
+        self.assertIn("{src} 源语言", dialog.prompt_template.toolTip())
+        dialog.close()
+
+    def test_prompt_template_round_trips_from_the_editor(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        template = "把{text}翻译成{dst}"
+
+        dialog.prompt_template.setPlainText(template)
+
+        self.assertEqual(dialog.values().translation.prompt_template, template)
+        dialog.reset_prompt_button.click()
+        self.assertEqual(
+            dialog.prompt_template.toPlainText(),
+            DEFAULT_LLM_PROMPT_TEMPLATE,
+        )
+        dialog.close()
+
+    def test_translation_switch_disables_only_translation_settings(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        dialog.translation_enabled.setChecked(False)
+
+        self.assertFalse(dialog.translation_language_group.isEnabled())
+        self.assertTrue(dialog.translation_service_group.isEnabled())
+        self.assertFalse(dialog.backend.isEnabled())
+        self.assertEqual(dialog.translation_enabled.text(), "已关闭")
+        self.assertFalse(dialog.translation_advanced.isEnabled())
+        self.assertEqual(
+            dialog.prompt_template.highlighter.placeholder_format.foreground().color(),
+            dialog.prompt_template.palette().mid().color(),
+        )
+        self.assertFalse(dialog.values().translation.enabled)
         dialog.close()
 
     def test_sentence_minimum_follows_the_display_mode(self) -> None:
@@ -2242,6 +2367,36 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(provider.stream)
         self.assertEqual(loaded.translation.llm_provider_id, provider.id)
 
+    def test_legacy_translation_preference_migrates_into_the_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"translation":{"preference":"人名保留英文"}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertIn("翻译偏好：人名保留英文", loaded.translation.prompt_template)
+        self.assertIn("{text}", loaded.translation.prompt_template)
+
+    def test_long_prompt_placeholders_migrate_to_short_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"translation":{"prompt_template":"'
+                '{source_language} {target_language} {context} {glossary} {text}'
+                '"}}',
+                encoding="utf-8",
+            )
+
+            loaded, _ = load_config(path)
+
+        self.assertEqual(
+            loaded.translation.prompt_template,
+            "{src} {dst} {ctx} {terms} {text}",
+        )
+
     def test_invalid_json_is_backed_up_and_defaults_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -2439,6 +2594,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.segmentation.preview_min_chars, 4)
         self.assertEqual(loaded.segmentation.preview_interval_ms, 600)
         self.assertEqual(loaded.translation.deepl_api_plan, "free")
+        self.assertTrue(loaded.translation.enabled)
+        self.assertFalse(loaded.debug.enabled)
         self.assertEqual(loaded.translation.source_lang, "EN")
         self.assertEqual(loaded.translation.target_lang, "ZH-HANS")
         self.assertEqual(loaded.subtitle.theme, "clear")

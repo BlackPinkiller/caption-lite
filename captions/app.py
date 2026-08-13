@@ -22,6 +22,7 @@ from captions.config import (
     resolve_model_dir,
     save_config,
 )
+from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.global_shortcut import create_global_shortcut
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
@@ -40,13 +41,23 @@ class CaptionApplication(QObject):
         self.qt_app = qt_app
         self.config, self.config_path = load_config()
         self.config_load_warning = getattr(self.config, "_load_warning", "")
+        self.diagnostics = Diagnostics(
+            self.config.debug.enabled,
+            self.config_path.parent / "runtime" / "captions-debug.jsonl",
+        )
+        self.diagnostics.event(
+            "app.started",
+            translation_enabled=self.config.translation.enabled,
+            translation_backend=self.config.translation.backend,
+            asr_model=self.config.asr.model_variant,
+        )
         self.segmenter = Segmenter(
             max_chars=self.config.segmentation.max_chars,
             max_seconds=self.config.segmentation.max_seconds,
             split_lookback_chars=self.config.segmentation.split_lookback_chars,
             split_lookahead_chars=self.config.segmentation.split_lookahead_chars,
         )
-        self.translation_session = TranslationSession(self)
+        self.translation_session = TranslationSession(self, self.diagnostics)
         self.display_generation = 0
         self.display_kind = ""
         self.active_cue_id = 1
@@ -54,7 +65,7 @@ class CaptionApplication(QObject):
         self.device_text = "等待识别"
         self.model_text = "正在检测"
         self.status_before_test = ""
-        self.capture_session = CaptureSession(self)
+        self.capture_session = CaptureSession(self, self.diagnostics)
         self.download_session = ModelDownloadSession(self)
         self.download_prompt: QMessageBox | None = None
         self.download_succeeded = False
@@ -70,6 +81,7 @@ class CaptionApplication(QObject):
         qt_app.setWindowIcon(self.app_icon)
         self.overlay = OverlayWindow(self.config)
         self.history = HistoryDialog()
+        self.history.set_translation_enabled(self.config.translation.enabled)
         self.settings = SettingsDialog(self.config)
         self._connect_ui()
         self._connect_sessions()
@@ -99,7 +111,10 @@ class CaptionApplication(QObject):
         self.overlay.show()
         self.overlay.raise_()
         self.tray.show()
-        if not self.config.translation.google2_api_key.strip():
+        if (
+            self.config.translation.enabled
+            and not self.config.translation.google2_api_key.strip()
+        ):
             self.translation_session.request_google2_key()
         if self.config_load_warning:
             self.tray.showMessage(
@@ -304,15 +319,19 @@ class CaptionApplication(QObject):
         active = update.active
         if active:
             self.history.set_live(source=active)
-            if self.config.subtitle.mode in {"source", "bilingual"}:
+            if (
+                not self.config.translation.enabled
+                or self.config.subtitle.mode in {"source", "bilingual"}
+            ):
                 self._display_source(self.active_cue_id, active)
-            self.translation_session.schedule_preview(
-                active,
-                self.history.records,
-                self.config.translation,
-                self.config.segmentation,
-                self.active_cue_id,
-            )
+            if self.config.translation.enabled:
+                self.translation_session.schedule_preview(
+                    active,
+                    self.history.records,
+                    self.config.translation,
+                    self.config.segmentation,
+                    self.active_cue_id,
+                )
             self._restart_clear_timer()
 
     @Slot()
@@ -320,6 +339,11 @@ class CaptionApplication(QObject):
         if getattr(self, "closing", False):
             return
         update = self.segmenter.flush()
+        getattr(self, "diagnostics", NULL_DIAGNOSTICS).event(
+            "segment.flushed",
+            committed=update.committed,
+            forced=update.forced,
+        )
         if update.committed:
             self._commit(update.committed, update.forced)
 
@@ -344,18 +368,34 @@ class CaptionApplication(QObject):
             time=datetime.now().strftime("%H:%M:%S"),
             source=source,
             translation="",
-            backend=self.config.translation.backend,
+            backend=(
+                self.config.translation.backend
+                if self.config.translation.enabled
+                else "off"
+            ),
             forced=forced,
         )
         index = self.history.commit_live(record)
-        self.translation_session.request_commit(
-            source,
-            self.history.records[:-1],
-            self.config.translation,
-            record_id=index,
+        getattr(self, "diagnostics", NULL_DIAGNOSTICS).event(
+            "segment.committed",
             cue_id=cue_id,
+            record_id=index,
+            forced=forced,
+            translation_enabled=self.config.translation.enabled,
+            source=source,
         )
-        if self.config.subtitle.mode in {"source", "bilingual"}:
+        if self.config.translation.enabled:
+            self.translation_session.request_commit(
+                source,
+                self.history.records[:-1],
+                self.config.translation,
+                record_id=index,
+                cue_id=cue_id,
+            )
+        if (
+            not self.config.translation.enabled
+            or self.config.subtitle.mode in {"source", "bilingual"}
+        ):
             self._display_source(cue_id, source)
         self.active_cue_id += 1
         self._restart_clear_timer()
@@ -486,7 +526,7 @@ class CaptionApplication(QObject):
     def cycle_mode(self) -> None:
         index = self.MODES.index(self.config.subtitle.mode)
         self.config.subtitle.mode = self.MODES[(index + 1) % len(self.MODES)]
-        self.overlay.set_mode(self.config.subtitle.mode)
+        CaptionApplication._apply_display_mode(self)
         self._schedule_save()
 
     @Slot()
@@ -512,6 +552,7 @@ class CaptionApplication(QObject):
     @Slot(object)
     def apply_settings(self, config: AppConfig) -> None:
         was_capturing = self.capturing
+        translation_was_enabled = self.config.translation.enabled
         had_asr_thread = self.capture_session.running
         asr_changed = config.asr != self.config.asr
         recognizer_changed = any(
@@ -538,6 +579,25 @@ class CaptionApplication(QObject):
         config.window.height = geometry.height()
         config.window.locked = self.config.window.locked
         self.config = config
+        diagnostics = getattr(self, "diagnostics", NULL_DIAGNOSTICS)
+        diagnostics.configure(config.debug.enabled)
+        diagnostics.event(
+            "settings.applied",
+            translation_enabled=config.translation.enabled,
+            translation_backend=config.translation.backend,
+            subtitle_mode=config.subtitle.mode,
+        )
+        if hasattr(getattr(self, "history", None), "set_translation_enabled"):
+            self.history.set_translation_enabled(config.translation.enabled)
+        if translation_was_enabled and not config.translation.enabled:
+            self.translation_session.cancel_all()
+            self.overlay.canvas.set_content(translation="")
+        elif (
+            not translation_was_enabled
+            and config.translation.enabled
+            and not config.translation.google2_api_key.strip()
+        ):
+            self.translation_session.request_google2_key()
         self.segmenter.max_chars = config.segmentation.max_chars
         self.segmenter.max_seconds = config.segmentation.max_seconds
         self.segmenter.split_lookback_chars = (
@@ -548,7 +608,7 @@ class CaptionApplication(QObject):
         )
         self.overlay.config = config
         self.overlay.canvas.set_style(config.subtitle)
-        self.overlay.set_mode(config.subtitle.mode)
+        CaptionApplication._apply_display_mode(self)
         self._save_config()
         if model_is_complete(config):
             if self.model_loaded:
@@ -562,6 +622,8 @@ class CaptionApplication(QObject):
 
     @Slot(object)
     def test_translation(self, config: AppConfig) -> None:
+        if not config.translation.enabled:
+            return
         self.settings.set_translation_test_status("正在测试连接…")
         sample = {
             "ZH": "这是一次翻译连接测试。",
@@ -778,7 +840,7 @@ class CaptionApplication(QObject):
         if not any(screen.availableGeometry().intersects(geometry) for screen in screens):
             geometry.moveCenter(QApplication.primaryScreen().availableGeometry().center())
         self.overlay.setGeometry(geometry)
-        self.overlay.set_mode(self.config.subtitle.mode)
+        CaptionApplication._apply_display_mode(self)
 
     def _geometry_changed(self) -> None:
         if self.overlay.isVisible():
@@ -795,6 +857,15 @@ class CaptionApplication(QObject):
         self.config.window.height = geometry.height()
         save_config(self.config, self.config_path)
 
+    def _apply_display_mode(self) -> None:
+        mode = self.config.subtitle.mode
+        if not self.config.translation.enabled:
+            mode = "source"
+        if hasattr(self.overlay, "set_display_mode"):
+            self.overlay.set_display_mode(mode)
+        else:
+            self.overlay.set_mode(mode)
+
     def _show_overlay(self) -> None:
         self.overlay.show()
         self.overlay.raise_()
@@ -805,6 +876,7 @@ class CaptionApplication(QObject):
         if self.closing:
             return
         self.closing = True
+        getattr(self, "diagnostics", NULL_DIAGNOSTICS).event("app.stopping")
         self._save_config()
         self.hotkey.uninstall()
         self.translation_session.close()

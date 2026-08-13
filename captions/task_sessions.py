@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from captions.audio_asr import AudioAsrWorker
 from captions.config import AppConfig
+from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.model_download import ModelDownloadWorker
 
 
@@ -18,8 +19,13 @@ class CaptureSession(QObject):
     error = Signal(str)
     finished = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        diagnostics: Diagnostics = NULL_DIAGNOSTICS,
+    ) -> None:
         super().__init__(parent)
+        self.diagnostics = diagnostics
         self.thread: QThread | None = None
         self.worker: AudioAsrWorker | None = None
 
@@ -31,7 +37,7 @@ class CaptureSession(QObject):
         if self.running:
             return False
         thread = QThread(self)
-        worker = AudioAsrWorker(config)
+        worker = AudioAsrWorker(config, diagnostics=self.diagnostics)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.partial.connect(self.partial.emit)

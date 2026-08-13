@@ -17,6 +17,7 @@ from captions.config import (
     active_llm_provider,
     llm_chat_completions_url,
 )
+from captions.core.prompt_template import render_prompt_template
 
 GOOGLE2_BOOTSTRAP_URL = (
     "https://translate.google.com/translate_a/element.js"
@@ -141,22 +142,25 @@ def build_hymt_prompt(
     searchable = f"{background}\n{current}"
     source = LANGUAGE_NAMES.get(config.source_lang, config.source_lang)
     target = LANGUAGE_NAMES.get(config.target_lang, config.target_lang)
-    if config.source_lang == "AUTO":
-        direction = f"自动识别下面字幕的语言，并翻译成{target}。"
-    else:
-        direction = f"将下面未完成或完整的{source}字幕翻译成{target}。"
-    prompt = (
-        direction
-        + "只输出当前文本的译文，不要解释，不要续写或补全尚未说出的内容。"
-    )
-    if config.preference.strip():
-        prompt += f"\n翻译偏好：{config.preference.strip()}"
-    if background:
-        prompt += f"\n仅供消歧的上文（不要翻译）：\n{background}"
     terms = matching_glossary(config.glossary, searchable)
-    if terms:
-        prompt += "\n必须遵守的术语：" + "".join(f"\n{s} = {t}" for s, t in terms)
-    return f"{prompt}\n\n当前文本：\n{current}"
+    context_block = (
+        f"仅供消歧的上文（不要翻译）：\n{background}" if background else ""
+    )
+    glossary_block = (
+        "必须遵守的术语：" + "".join(f"\n{s} = {t}" for s, t in terms)
+        if terms
+        else ""
+    )
+    return render_prompt_template(
+        config.prompt_template,
+        {
+            "src": source,
+            "dst": target,
+            "ctx": context_block,
+            "terms": glossary_block,
+            "text": current,
+        },
+    )
 
 
 class TranslationSignals(QObject):
@@ -202,12 +206,15 @@ class Translator(QObject):
         config: TranslationConfig,
         *,
         preview: bool = False,
+        on_registered: Callable[[int], None] | None = None,
     ) -> int:
         with self._lock:
             if self._closing:
                 raise RuntimeError("翻译器正在关闭")
         self._generation += 1
         generation = self._generation
+        if on_registered is not None:
+            on_registered(generation)
         context_segments = max(0, int(config.context_segments))
         snapshot = list(history[-context_segments:]) if context_segments else []
         if preview:
@@ -310,6 +317,16 @@ class Translator(QObject):
     def cancel_pending(self) -> None:
         self._generation += 1
         self._cancel_preview()
+
+    def cancel_all(self) -> None:
+        with self._lock:
+            self._generation += 1
+            cancellations = list(self._cancellations.values())
+            futures = list(self._futures)
+        for cancellation in cancellations:
+            cancellation.cancel()
+        for future in futures:
+            future.cancel()
 
     def _cancel_preview(self) -> None:
         with self._lock:
