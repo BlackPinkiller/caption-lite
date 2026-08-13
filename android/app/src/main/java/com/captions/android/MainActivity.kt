@@ -17,22 +17,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Box
-import com.captions.android.platform.settings.AndroidSettingsStore
-import com.captions.android.platform.audio.AndroidMicrophoneInput
-import com.captions.android.core.recognition.QueuedRecognitionSession
-import com.captions.android.core.translation.RealtimeTranslationSession
-import com.captions.android.core.translation.TranslationRouter
-import com.captions.android.platform.model.AndroidNemotronModelManager
-import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
-import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
-import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.platform.session.AndroidScreenAwakeController
-import com.captions.android.platform.translation.GoogleOnDeviceTranslator
-import com.captions.android.platform.translation.GoogleTranslationModelManager
-import com.captions.android.platform.translation.Google2Translator
-import com.captions.android.platform.translation.DeepLTranslator
-import com.captions.android.platform.translation.UrlConnectionHttpClient
-import com.captions.android.platform.translation.OpenAICompatibleTranslator
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
@@ -40,39 +25,14 @@ import com.captions.android.ui.theme.CaptionsTheme
 
 class MainActivity : ComponentActivity() {
     private var startAfterMicrophonePermission = false
+    private val runtime
+        get() = (application as CaptionsApplication).runtime
     private val sessionViewModel: SessionViewModel by viewModels {
-        SessionViewModel.Factory(
-            com.captions.android.core.session.SessionStore(
-                AndroidSettingsStore(applicationContext),
-            ),
-        )
+        SessionViewModel.Factory(runtime.sessionStore)
     }
-    private val sessionController by lazy {
-        AndroidSessionController(
-            audioInput = AndroidMicrophoneInput(),
-            viewModel = sessionViewModel,
-            recognitionSession = QueuedRecognitionSession(
-                SherpaNemotronRecognitionFactory(modelManager::modelDirectory),
-            ),
-            systemRecognitionSession = AndroidSystemRecognitionSession(applicationContext),
-            translationSession = translationSession,
-        )
-    }
-    private val modelManager by lazy { AndroidNemotronModelManager(applicationContext) }
-    private val translationModelManager by lazy {
-        GoogleTranslationModelManager(applicationContext)
-    }
-    private val translationSession by lazy {
-        val httpClient = UrlConnectionHttpClient()
-        RealtimeTranslationSession(
-            TranslationRouter(
-                local = GoogleOnDeviceTranslator(translationModelManager),
-                google2 = Google2Translator(httpClient),
-                deepL = DeepLTranslator(httpClient),
-                openAICompatible = OpenAICompatibleTranslator(httpClient),
-            ),
-        )
-    }
+    private val sessionController get() = runtime.sessionController
+    private val modelManager get() = runtime.recognitionModelManager
+    private val translationModelManager get() = runtime.translationModelManager
     private val screenAwakeController by lazy { AndroidScreenAwakeController(window) }
 
     private val microphonePermission = registerForActivityResult(
@@ -145,9 +105,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onDownloadModel = modelManager::download,
                             onTranslationSettingsChanged = {
-                                translationSession.cancelPending()
                                 sessionViewModel.setTranslationSettings(it)
-                                translationModelManager.configure(it)
+                                runtime.applyTranslationSettings()
                             },
                             onDownloadTranslationModel = translationModelManager::download,
                             onDisplayModeChanged = sessionViewModel::setDisplayMode,
@@ -173,9 +132,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         screenAwakeController.setSessionActive(false)
-        sessionController.close()
-        modelManager.close()
-        translationModelManager.close()
         super.onDestroy()
     }
 }
