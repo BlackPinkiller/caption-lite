@@ -31,7 +31,6 @@ from captions.audio_asr import (
     AudioAsrWorker,
     AutoStandbyDetector,
     VadSpeechGate,
-    _record_samples,
 )
 from captions.config import (
     AppConfig,
@@ -53,6 +52,7 @@ from captions.config import (
     subtitle_style_values,
 )
 from captions.model_download import ModelDownloadWorker
+from captions.platforms.windows.audio_source import _record_soundcard_samples
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
 from captions.translation import (
@@ -815,7 +815,7 @@ class CaptureLifecycleTests(unittest.TestCase):
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            samples = _record_samples(Recorder())
+            samples = _record_soundcard_samples(Recorder(), CAPTURE_BLOCK_SIZE)
 
         self.assertEqual(samples.shape, (CAPTURE_BLOCK_SIZE, 1))
         self.assertEqual([str(item.message) for item in caught], ["another soundcard warning"])

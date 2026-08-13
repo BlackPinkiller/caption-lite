@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import threading
 import time
-import warnings
 from collections import deque
 
 import numpy as np
-import soundcard as sc
 from PySide6.QtCore import QObject, Signal, Slot
 
 from captions.config import (
@@ -15,6 +13,8 @@ from captions.config import (
     model_preset,
     resolve_model_files,
 )
+from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
+from captions.ports.audio_source import AudioSource
 
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
@@ -22,19 +22,6 @@ VAD_WINDOW_SIZE = 512
 VAD_PRE_ROLL_WINDOWS = 16
 CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
-
-
-def _record_samples(recorder) -> np.ndarray:
-    # SoundCard keeps the stream running after a WASAPI discontinuity, but it
-    # repeats the same warning for every flagged packet. Keep all other audio
-    # warnings visible while quieting only this known recoverable condition.
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r"^data discontinuity in recording$",
-            category=sc.SoundcardRuntimeWarning,
-        )
-        return recorder.record(numframes=CAPTURE_BLOCK_SIZE)
 
 
 class AutoStandbyDetector:
@@ -118,9 +105,15 @@ class AudioAsrWorker(QObject):
     error = Signal(str)
     stopped = Signal()
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        audio_source: AudioSource = DEFAULT_AUDIO_SOURCE,
+    ) -> None:
         super().__init__()
         self.config = config
+        self.audio_source = audio_source
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._standby = AutoStandbyDetector(config.asr.auto_standby_seconds)
@@ -147,24 +140,21 @@ class AudioAsrWorker(QObject):
                     self.status.emit("识别已暂停")
                     while self._pause.is_set() and not self._stop.is_set():
                         time.sleep(0.1)
-                    if self._stop.is_set():
-                        break
+                if self._stop.is_set():
+                    break
                 self.status.emit("正在连接系统播放设备…")
-                speaker = sc.default_speaker()
-                if speaker is None:
-                    raise RuntimeError("没有找到默认播放设备")
-                loopback = sc.get_microphone(speaker.id, include_loopback=True)
-                self.status.emit(f"正在识别：{speaker.name}")
+                capture = self.audio_source.open_default_output(
+                    sample_rate=16000,
+                    channels=1,
+                    block_size=CAPTURE_BUFFER_SIZE,
+                )
+                self.status.emit(f"正在识别：{capture.name}")
                 try:
-                    with loopback.recorder(
-                        samplerate=16000,
-                        channels=1,
-                        blocksize=CAPTURE_BUFFER_SIZE,
-                    ) as recorder:
+                    with capture:
                         while not self._stop.is_set():
                             if self._pause.is_set():
                                 break
-                            samples = _record_samples(recorder)
+                            samples = capture.read(CAPTURE_BLOCK_SIZE)
                             mono = np.asarray(samples[:, 0], dtype=np.float32)
                             level = float(np.max(np.abs(mono))) if mono.size else 0.0
                             standby_change = self._standby.update(level)
@@ -178,7 +168,7 @@ class AudioAsrWorker(QObject):
                             if standby_change is False:
                                 speech_gate.reset()
                                 self.auto_standby_changed.emit(False)
-                                self.status.emit(f"正在识别：{speaker.name}")
+                                self.status.emit(f"正在识别：{capture.name}")
                             elif self._standby.standby:
                                 continue
                             for speech, vad_endpoint in speech_gate.process(mono):
