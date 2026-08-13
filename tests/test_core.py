@@ -23,6 +23,10 @@ from PySide6.QtGui import QColor, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
+from captions.adapters.sherpa_onnx_recognition import (
+    SherpaOnnxRecognitionBackend,
+    SherpaStreamingRecognition,
+)
 from captions.app import CaptionApplication, TranslationJob
 from captions.audio_asr import (
     CAPTURE_BLOCK_SIZE,
@@ -982,6 +986,29 @@ class TaskSessionCleanupTests(unittest.TestCase):
 
 
 class AudioAsrTests(unittest.TestCase):
+    def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:
+        calls: list[object] = []
+        stream = SimpleNamespace(
+            accept_waveform=lambda rate, samples: calls.append((rate, samples.copy()))
+        )
+        ready = iter((True, False))
+        recognizer = SimpleNamespace(
+            is_ready=lambda current: next(ready),
+            decode_stream=lambda current: calls.append("decoded"),
+            get_result=lambda current: " recognized text ",
+            is_endpoint=lambda current: True,
+            reset=lambda current: calls.append("reset"),
+        )
+        session = SherpaStreamingRecognition(recognizer, stream)
+
+        update = session.accept(np.ones(4, dtype=np.float32))
+        session.reset()
+
+        self.assertEqual(update.text, "recognized text")
+        self.assertTrue(update.endpoint)
+        self.assertEqual(calls[0][0], 16000)
+        self.assertEqual(calls[1:], ["decoded", "reset"])
+
     def test_auto_standby_enters_after_silence_and_wakes_on_audio(self) -> None:
         detector = AutoStandbyDetector(30, now=10.0)
 
@@ -1007,9 +1034,19 @@ class AudioAsrTests(unittest.TestCase):
         )
         recognizer = SimpleNamespace(create_stream=lambda: stream)
 
-        created = AudioAsrWorker(config)._create_stream(recognizer)
+        with tempfile.TemporaryDirectory() as directory:
+            config.asr.model_dir = directory
+            for name in ("encoder", "decoder", "joiner", "tokens"):
+                (Path(directory) / getattr(config.asr, name)).write_bytes(b"x")
+            fake_sherpa = SimpleNamespace(
+                OnlineRecognizer=SimpleNamespace(
+                    from_transducer=lambda **kwargs: recognizer
+                )
+            )
+            with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
+                created = SherpaOnnxRecognitionBackend().create_streaming(config)
 
-        self.assertIs(created, stream)
+        self.assertIs(created._stream, stream)
         self.assertEqual(options, [("language", "ja")])
 
     def test_single_language_stream_does_not_receive_a_language_option(self) -> None:
@@ -1018,7 +1055,17 @@ class AudioAsrTests(unittest.TestCase):
         stream = SimpleNamespace(set_option=lambda key, value: options.append((key, value)))
         recognizer = SimpleNamespace(create_stream=lambda: stream)
 
-        AudioAsrWorker(config)._create_stream(recognizer)
+        with tempfile.TemporaryDirectory() as directory:
+            config.asr.model_dir = directory
+            for name in ("encoder", "decoder", "joiner", "tokens"):
+                (Path(directory) / getattr(config.asr, name)).write_bytes(b"x")
+            fake_sherpa = SimpleNamespace(
+                OnlineRecognizer=SimpleNamespace(
+                    from_transducer=lambda **kwargs: recognizer
+                )
+            )
+            with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
+                SherpaOnnxRecognitionBackend().create_streaming(config)
 
         self.assertEqual(options, [])
 
@@ -1030,14 +1077,15 @@ class AudioAsrTests(unittest.TestCase):
             for name in ("encoder", "decoder", "joiner", "tokens"):
                 (Path(directory) / getattr(config.asr, name)).write_bytes(b"x")
             calls: list[dict[str, object]] = []
+            recognizer = SimpleNamespace(create_stream=lambda: SimpleNamespace())
             fake_sherpa = SimpleNamespace(
                 OnlineRecognizer=SimpleNamespace(
-                    from_transducer=lambda **kwargs: calls.append(kwargs) or object()
+                    from_transducer=lambda **kwargs: calls.append(kwargs) or recognizer
                 )
             )
 
             with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
-                AudioAsrWorker(config)._create_recognizer()
+                SherpaOnnxRecognitionBackend().create_streaming(config)
 
         self.assertEqual(calls[0]["num_threads"], 4)
 
@@ -1051,7 +1099,7 @@ class AudioAsrTests(unittest.TestCase):
         )
 
         with patch.dict("sys.modules", {"sherpa_onnx": fake_sherpa}):
-            created = AudioAsrWorker(config)._create_vad()
+            created = SherpaOnnxRecognitionBackend().create_vad(config)
 
         self.assertIs(created, vad_config)
         self.assertEqual(vad_config.silero_vad.min_silence_duration, 0.9)
@@ -1087,7 +1135,7 @@ class AudioAsrTests(unittest.TestCase):
         np.testing.assert_array_equal(events[0][0], samples[:12])
 
     def test_bundled_silero_vad_ignores_digital_silence(self) -> None:
-        gate = VadSpeechGate(AudioAsrWorker(AppConfig())._create_vad())
+        gate = VadSpeechGate(SherpaOnnxRecognitionBackend().create_vad(AppConfig()))
         events = gate.process(np.zeros(16000, dtype=np.float32))
         self.assertEqual(events, [])
 
