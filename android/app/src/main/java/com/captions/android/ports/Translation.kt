@@ -26,3 +26,20 @@ interface TranslationModelManager : AutoCloseable {
     fun download()
     fun isReady(settings: TranslationSettings): Boolean
 }
+
+data class HttpRequest(
+    val method: String,
+    val url: String,
+    val headers: Map<String, String> = emptyMap(),
+    val body: String? = null,
+    val timeoutMillis: Int = 15_000,
+)
+
+data class HttpResponse(
+    val statusCode: Int,
+    val body: String,
+)
+
+fun interface HttpClient {
+    fun execute(request: HttpRequest): HttpResponse
+}

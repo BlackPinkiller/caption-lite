@@ -17,10 +17,20 @@ enum class RecognitionEngine {
     AndroidSystem,
 }
 
+enum class TranslationEngine {
+    GoogleOnDevice,
+    Google2,
+    DeepL,
+}
+
 data class TranslationSettings(
     val enabled: Boolean = true,
+    val engine: TranslationEngine = TranslationEngine.GoogleOnDevice,
     val sourceLanguage: String = "en",
     val targetLanguage: String = "zh",
+    val deeplApiKey: String = "",
+    val deeplPro: Boolean = false,
+    val timeoutMillis: Int = 15_000,
 )
 
 data class AppearanceSettings(

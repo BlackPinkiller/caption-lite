@@ -17,6 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captions.android.core.session.DisplayMode
@@ -37,6 +39,7 @@ import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.session.TranslationEngine
 import com.captions.android.ports.ModelPhase
 import com.captions.android.ports.ModelState
 
@@ -151,9 +154,17 @@ private fun TranslationSettingsGroup(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Google 本地", fontSize = 15.sp)
+                Text("启用翻译", fontSize = 15.sp)
                 Text(
-                    if (settings.enabled) "使用设备端语言模型" else "已关闭",
+                    if (settings.enabled) {
+                        when (settings.engine) {
+                            TranslationEngine.GoogleOnDevice -> "Google 本地"
+                            TranslationEngine.Google2 -> "Google"
+                            TranslationEngine.DeepL -> "DeepL"
+                        }
+                    } else {
+                        "已关闭"
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                 )
@@ -165,6 +176,15 @@ private fun TranslationSettingsGroup(
             )
         }
         if (settings.enabled) {
+            ChoiceRow(
+                choices = listOf(
+                    TranslationEngine.GoogleOnDevice to "Google 本地",
+                    TranslationEngine.Google2 to "Google",
+                    TranslationEngine.DeepL to "DeepL",
+                ),
+                selected = settings.engine,
+                onSelected = { onChanged(settings.copy(engine = it)) },
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -206,7 +226,27 @@ private fun TranslationSettingsGroup(
                     modifier = Modifier.weight(1f),
                 )
             }
-            TranslationModelStatusRow(modelState, onDownloadModel)
+            when (settings.engine) {
+                TranslationEngine.GoogleOnDevice -> {
+                    TranslationModelStatusRow(modelState, onDownloadModel)
+                }
+                TranslationEngine.Google2 -> Unit
+                TranslationEngine.DeepL -> {
+                    OutlinedTextField(
+                        value = settings.deeplApiKey,
+                        onValueChange = { onChanged(settings.copy(deeplApiKey = it)) },
+                        label = { Text("API 密钥") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    ChoiceRow(
+                        choices = listOf(false to "API Free", true to "API Pro"),
+                        selected = settings.deeplPro,
+                        onSelected = { onChanged(settings.copy(deeplPro = it)) },
+                    )
+                }
+            }
         }
     }
 }

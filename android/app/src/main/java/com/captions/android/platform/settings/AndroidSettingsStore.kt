@@ -6,10 +6,13 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.session.TranslationEngine
 import com.captions.android.ports.SettingsStore
+import com.captions.android.platform.security.AndroidSecretStore
 
 class AndroidSettingsStore(context: Context) : SettingsStore {
     private val preferences = context.getSharedPreferences("captions_settings", Context.MODE_PRIVATE)
+    private val secretStore = AndroidSecretStore(context)
 
     override fun loadAppearance(): AppearanceSettings = AppearanceSettings(
         displayMode = enumValue(
@@ -44,16 +47,28 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
 
     override fun loadTranslation(): TranslationSettings = TranslationSettings(
         enabled = preferences.getBoolean(KEY_TRANSLATION_ENABLED, true),
+        engine = enumValue(
+            preferences.getString(KEY_TRANSLATION_ENGINE, null),
+            TranslationEngine.GoogleOnDevice,
+        ),
         sourceLanguage = preferences.getString(KEY_SOURCE_LANGUAGE, "en") ?: "en",
         targetLanguage = preferences.getString(KEY_TARGET_LANGUAGE, "zh") ?: "zh",
+        deeplApiKey = secretStore.read(KEY_DEEPL_API_KEY),
+        deeplPro = preferences.getBoolean(KEY_DEEPL_PRO, false),
+        timeoutMillis = preferences.getInt(KEY_TRANSLATION_TIMEOUT, 15_000)
+            .coerceIn(3_000, 120_000),
     )
 
     override fun saveTranslation(settings: TranslationSettings) {
         preferences.edit()
             .putBoolean(KEY_TRANSLATION_ENABLED, settings.enabled)
+            .putString(KEY_TRANSLATION_ENGINE, settings.engine.name)
             .putString(KEY_SOURCE_LANGUAGE, settings.sourceLanguage)
             .putString(KEY_TARGET_LANGUAGE, settings.targetLanguage)
+            .putBoolean(KEY_DEEPL_PRO, settings.deeplPro)
+            .putInt(KEY_TRANSLATION_TIMEOUT, settings.timeoutMillis)
             .apply()
+        secretStore.write(KEY_DEEPL_API_KEY, settings.deeplApiKey.trim())
     }
 
     private inline fun <reified T : Enum<T>> enumValue(value: String?, fallback: T): T =
@@ -66,7 +81,11 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_TRANSLATION_SIZE = "translation_size"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
         const val KEY_TRANSLATION_ENABLED = "translation_enabled"
+        const val KEY_TRANSLATION_ENGINE = "translation_engine"
         const val KEY_SOURCE_LANGUAGE = "translation_source_language"
         const val KEY_TARGET_LANGUAGE = "translation_target_language"
+        const val KEY_DEEPL_API_KEY = "deepl_api_key"
+        const val KEY_DEEPL_PRO = "deepl_pro"
+        const val KEY_TRANSLATION_TIMEOUT = "translation_timeout"
     }
 }

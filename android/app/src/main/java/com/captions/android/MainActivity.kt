@@ -21,6 +21,7 @@ import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.audio.AndroidMicrophoneInput
 import com.captions.android.core.recognition.QueuedRecognitionSession
 import com.captions.android.core.translation.QueuedTranslationSession
+import com.captions.android.core.translation.TranslationRouter
 import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
 import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
@@ -28,6 +29,9 @@ import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.platform.session.AndroidScreenAwakeController
 import com.captions.android.platform.translation.GoogleOnDeviceTranslator
 import com.captions.android.platform.translation.GoogleTranslationModelManager
+import com.captions.android.platform.translation.Google2Translator
+import com.captions.android.platform.translation.DeepLTranslator
+import com.captions.android.platform.translation.UrlConnectionHttpClient
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
@@ -54,7 +58,14 @@ class MainActivity : ComponentActivity() {
         GoogleTranslationModelManager(applicationContext)
     }
     private val translationSession by lazy {
-        QueuedTranslationSession(GoogleOnDeviceTranslator(translationModelManager))
+        val httpClient = UrlConnectionHttpClient()
+        QueuedTranslationSession(
+            TranslationRouter(
+                local = GoogleOnDeviceTranslator(translationModelManager),
+                google2 = Google2Translator(httpClient),
+                deepL = DeepLTranslator(httpClient),
+            ),
+        )
     }
     private val screenAwakeController by lazy { AndroidScreenAwakeController(window) }
 
