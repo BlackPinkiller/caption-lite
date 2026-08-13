@@ -19,10 +19,13 @@ import androidx.compose.foundation.layout.Box
 import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.audio.AndroidMicrophoneInput
 import com.captions.android.core.recognition.QueuedRecognitionSession
+import com.captions.android.core.translation.QueuedTranslationSession
 import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
 import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
 import com.captions.android.platform.session.AndroidSessionController
+import com.captions.android.platform.translation.GoogleOnDeviceTranslator
+import com.captions.android.platform.translation.GoogleTranslationModelManager
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
@@ -41,9 +44,16 @@ class MainActivity : ComponentActivity() {
                 SherpaNemotronRecognitionFactory(modelManager::modelDirectory),
             ),
             systemRecognitionSession = AndroidSystemRecognitionSession(applicationContext),
+            translationSession = translationSession,
         )
     }
     private val modelManager by lazy { AndroidNemotronModelManager(applicationContext) }
+    private val translationModelManager by lazy {
+        GoogleTranslationModelManager(applicationContext)
+    }
+    private val translationSession by lazy {
+        QueuedTranslationSession(GoogleOnDeviceTranslator(translationModelManager))
+    }
 
     private val microphonePermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -61,10 +71,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        translationModelManager.configure(sessionViewModel.state.value.translationSettings)
 
         setContent {
             val state by sessionViewModel.state.collectAsStateWithLifecycle()
             val modelState by modelManager.state.collectAsStateWithLifecycle()
+            val translationModelState by translationModelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             BackHandler(enabled = settingsOpen) { settingsOpen = false }
             CaptionsTheme {
@@ -99,11 +111,18 @@ class MainActivity : ComponentActivity() {
                         SettingsPanel(
                             state = state,
                             modelState = modelState,
+                            translationModelState = translationModelState,
                             onRecognitionEngineChanged = {
                                 if (state.running) sessionController.pause()
                                 sessionViewModel.setRecognitionEngine(it)
                             },
                             onDownloadModel = modelManager::download,
+                            onTranslationSettingsChanged = {
+                                translationSession.cancelPending()
+                                sessionViewModel.setTranslationSettings(it)
+                                translationModelManager.configure(it)
+                            },
+                            onDownloadTranslationModel = translationModelManager::download,
                             onDisplayModeChanged = sessionViewModel::setDisplayMode,
                             onFontChoiceChanged = sessionViewModel::setFontChoice,
                             onSourceSizeChanged = sessionViewModel::setSourceSize,
@@ -128,6 +147,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         sessionController.close()
         modelManager.close()
+        translationModelManager.close()
         super.onDestroy()
     }
 }

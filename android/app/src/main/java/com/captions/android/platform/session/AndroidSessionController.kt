@@ -6,6 +6,7 @@ import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionController
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.SampleRecognitionSession
+import com.captions.android.ports.TranslationSession
 import com.captions.android.ui.session.SessionViewModel
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -14,6 +15,7 @@ class AndroidSessionController(
     private val viewModel: SessionViewModel,
     private val recognitionSession: SampleRecognitionSession? = null,
     private val systemRecognitionSession: DirectRecognitionSession? = null,
+    private val translationSession: TranslationSession? = null,
 ) : RecognitionController, AutoCloseable {
     private val startRequested = AtomicBoolean(false)
     private var cueId = 1L
@@ -89,6 +91,21 @@ class AndroidSessionController(
         }
         if (update.endpoint) {
             viewModel.commitCurrent()
+            val currentCueId = cueId
+            val source = viewModel.state.value.entries.lastOrNull { it.cueId == currentCueId }?.source.orEmpty()
+            val translationSettings = viewModel.state.value.translationSettings
+            if (translationSettings.enabled && source.isNotBlank()) {
+                val accepted = translationSession?.submit(
+                    cueId = currentCueId,
+                    text = source,
+                    settings = translationSettings,
+                    onResult = viewModel::updateTranslation,
+                    onError = viewModel::showMessage,
+                ) ?: false
+                if (!accepted && translationSession != null) {
+                    viewModel.showMessage("翻译任务过多，请稍后")
+                }
+            }
             cueId += 1
         }
     }
@@ -131,6 +148,7 @@ class AndroidSessionController(
         startRequested.set(false)
         recognitionSession?.close()
         systemRecognitionSession?.close()
+        translationSession?.close()
         audioInput.close()
     }
 }

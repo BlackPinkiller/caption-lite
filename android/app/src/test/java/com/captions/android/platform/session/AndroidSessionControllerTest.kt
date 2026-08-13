@@ -2,11 +2,13 @@ package com.captions.android.platform.session
 
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.SampleRecognitionSession
 import com.captions.android.ports.SettingsStore
+import com.captions.android.ports.TranslationSession
 import com.captions.android.ui.session.SessionViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,6 +119,30 @@ class AndroidSessionControllerTest {
         assertTrue(viewModel.state.value.running)
     }
 
+    @Test
+    fun onlyACompletedCueIsSubmittedForTranslation() {
+        val audio = FakeAudioInput()
+        val recognition = FakeSampleRecognitionSession()
+        val translation = FakeTranslationSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = audio,
+            viewModel = viewModel,
+            recognitionSession = recognition,
+            translationSession = translation,
+        )
+
+        controller.start()
+        recognition.ready()
+        recognition.update(RecognitionUpdate("unfinished", endpoint = false))
+        assertEquals(0, translation.submissions.size)
+
+        recognition.update(RecognitionUpdate("finished sentence", endpoint = true))
+        assertEquals(listOf(1L to "finished sentence"), translation.submissions)
+        translation.complete(1L, "完整译文")
+        assertEquals("完整译文", viewModel.state.value.entries.single().translation)
+    }
+
     private class FakeAudioInput : AudioInput {
         override var running = false
         var startCount = 0
@@ -175,6 +201,27 @@ class AndroidSessionControllerTest {
         fun ready() = readyCallback()
     }
 
+    private class FakeTranslationSession : TranslationSession {
+        val submissions = mutableListOf<Pair<Long, String>>()
+        private var resultCallback: (Long, String) -> Unit = { _, _ -> }
+
+        override fun submit(
+            cueId: Long,
+            text: String,
+            settings: TranslationSettings,
+            onResult: (Long, String) -> Unit,
+            onError: (String) -> Unit,
+        ): Boolean {
+            submissions += cueId to text
+            resultCallback = onResult
+            return true
+        }
+
+        override fun cancelPending() = Unit
+        override fun close() = Unit
+        fun complete(cueId: Long, text: String) = resultCallback(cueId, text)
+    }
+
     private class MemorySettingsStore : SettingsStore {
         private var settings = AppearanceSettings()
         private var engine = RecognitionEngine.Nemotron
@@ -190,5 +237,9 @@ class AndroidSessionControllerTest {
         override fun saveRecognitionEngine(engine: RecognitionEngine) {
             this.engine = engine
         }
+
+        override fun loadTranslation(): TranslationSettings = TranslationSettings()
+
+        override fun saveTranslation(settings: TranslationSettings) = Unit
     }
 }

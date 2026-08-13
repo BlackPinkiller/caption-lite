@@ -5,6 +5,7 @@ import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.SettingsStore
 
 class AndroidSettingsStore(context: Context) : SettingsStore {
@@ -41,6 +42,20 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         preferences.edit().putString(KEY_RECOGNITION_ENGINE, engine.name).apply()
     }
 
+    override fun loadTranslation(): TranslationSettings = TranslationSettings(
+        enabled = preferences.getBoolean(KEY_TRANSLATION_ENABLED, true),
+        sourceLanguage = preferences.getString(KEY_SOURCE_LANGUAGE, "en") ?: "en",
+        targetLanguage = preferences.getString(KEY_TARGET_LANGUAGE, "zh") ?: "zh",
+    )
+
+    override fun saveTranslation(settings: TranslationSettings) {
+        preferences.edit()
+            .putBoolean(KEY_TRANSLATION_ENABLED, settings.enabled)
+            .putString(KEY_SOURCE_LANGUAGE, settings.sourceLanguage)
+            .putString(KEY_TARGET_LANGUAGE, settings.targetLanguage)
+            .apply()
+    }
+
     private inline fun <reified T : Enum<T>> enumValue(value: String?, fallback: T): T =
         value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: fallback
 
@@ -50,5 +65,8 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_SOURCE_SIZE = "source_size"
         const val KEY_TRANSLATION_SIZE = "translation_size"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
+        const val KEY_TRANSLATION_ENABLED = "translation_enabled"
+        const val KEY_SOURCE_LANGUAGE = "translation_source_language"
+        const val KEY_TARGET_LANGUAGE = "translation_target_language"
     }
 }

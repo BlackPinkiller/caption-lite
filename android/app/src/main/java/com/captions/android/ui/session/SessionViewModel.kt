@@ -8,6 +8,7 @@ import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.SessionTimeline
 import com.captions.android.core.session.SessionUiState
+import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,7 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
                 sourceSizeSp = it.sourceSizeSp,
                 translationSizeSp = it.translationSizeSp,
                 recognitionEngine = settingsStore.loadRecognitionEngine(),
+                translationSettings = settingsStore.loadTranslation(),
             )
         },
     )
@@ -71,6 +73,11 @@ class SessionViewModel(private val settingsStore: SettingsStore) : ViewModel() {
     fun setRecognitionEngine(engine: RecognitionEngine) {
         mutableState.value = mutableState.value.copy(recognitionEngine = engine, message = "")
         settingsStore.saveRecognitionEngine(engine)
+    }
+
+    fun setTranslationSettings(settings: TranslationSettings) {
+        mutableState.value = mutableState.value.copy(translationSettings = settings, message = "")
+        settingsStore.saveTranslation(settings)
     }
 
     fun showMessage(message: String) {

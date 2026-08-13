@@ -17,6 +17,12 @@ enum class RecognitionEngine {
     AndroidSystem,
 }
 
+data class TranslationSettings(
+    val enabled: Boolean = true,
+    val sourceLanguage: String = "en",
+    val targetLanguage: String = "zh",
+)
+
 data class AppearanceSettings(
     val displayMode: DisplayMode = DisplayMode.Bilingual,
     val fontChoice: FontChoice = FontChoice.System,
@@ -39,6 +45,7 @@ data class SessionUiState(
     val sourceSizeSp: Int = 15,
     val translationSizeSp: Int = 17,
     val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
+    val translationSettings: TranslationSettings = TranslationSettings(),
     val entries: List<SessionEntry> = emptyList(),
     val message: String = "",
 )
