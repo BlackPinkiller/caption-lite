@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
+import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationSettings
@@ -58,6 +59,9 @@ fun SettingsPanel(
     onFontChoiceChanged: (FontChoice) -> Unit,
     onSourceSizeChanged: (Int) -> Unit,
     onTranslationSizeChanged: (Int) -> Unit,
+    onOverlayEnabledChanged: (Boolean) -> Unit,
+    onOverlayBackgroundChanged: (Boolean) -> Unit,
+    onOverlayPositionChanged: (OverlayPosition) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -106,6 +110,14 @@ fun SettingsPanel(
                 onChanged = onTranslationSettingsChanged,
                 onDownloadModel = onDownloadTranslationModel,
             )
+            OverlaySettingsGroup(
+                enabled = state.overlayEnabled,
+                backgroundEnabled = state.overlayBackgroundEnabled,
+                position = state.overlayPosition,
+                onEnabledChanged = onOverlayEnabledChanged,
+                onBackgroundChanged = onOverlayBackgroundChanged,
+                onPositionChanged = onOverlayPositionChanged,
+            )
             SettingGroup(label = "显示模式") {
                 ChoiceRow(
                     choices = listOf(
@@ -138,6 +150,46 @@ fun SettingsPanel(
                 value = state.translationSizeSp,
                 onChanged = onTranslationSizeChanged,
             )
+        }
+    }
+}
+
+@Composable
+private fun OverlaySettingsGroup(
+    enabled: Boolean,
+    backgroundEnabled: Boolean,
+    position: OverlayPosition,
+    onEnabledChanged: (Boolean) -> Unit,
+    onBackgroundChanged: (Boolean) -> Unit,
+    onPositionChanged: (OverlayPosition) -> Unit,
+) {
+    SettingGroup(label = "悬浮字幕") {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("在其他应用上显示", fontSize = 15.sp)
+            Spacer(Modifier.weight(1f))
+            Switch(checked = enabled, onCheckedChange = onEnabledChanged)
+        }
+        if (enabled) {
+            ChoiceRow(
+                choices = listOf(
+                    OverlayPosition.Free to "自由",
+                    OverlayPosition.Top to "顶部",
+                    OverlayPosition.Bottom to "底部",
+                ),
+                selected = position,
+                onSelected = onPositionChanged,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("文字背景", fontSize = 15.sp)
+                Spacer(Modifier.weight(1f))
+                Switch(checked = backgroundEnabled, onCheckedChange = onBackgroundChanged)
+            }
         }
     }
 }

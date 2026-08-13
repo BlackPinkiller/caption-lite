@@ -15,22 +15,26 @@ import com.captions.android.CaptionsApplication
 import com.captions.android.MainActivity
 import com.captions.android.R
 import com.captions.android.core.session.SessionUiState
+import com.captions.android.platform.overlay.AndroidCaptionOverlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class CaptionSessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val runtime get() = (application as CaptionsApplication).runtime
     private lateinit var notificationManager: NotificationManager
+    private lateinit var overlay: AndroidCaptionOverlay
     private var observedActiveSession = false
 
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
+        overlay = AndroidCaptionOverlay(this)
         createNotificationChannel()
         startForeground(
             NOTIFICATION_ID,
@@ -38,7 +42,12 @@ class CaptionSessionService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
         )
         scope.launch {
-            runtime.sessionStore.state.collectLatest { state ->
+            combine(runtime.sessionStore.state, runtime.appVisible) { state, appVisible ->
+                state to appVisible
+            }.collectLatest { (state, appVisible) ->
+                overlay.render(
+                    if (appVisible) state.copy(overlayEnabled = false) else state,
+                )
                 val active = state.starting || state.running
                 if (active) {
                     observedActiveSession = true
@@ -60,6 +69,7 @@ class CaptionSessionService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        overlay.close()
         if (runtime.sessionStore.state.value.let { it.starting || it.running }) {
             runtime.sessionController.pause()
         }

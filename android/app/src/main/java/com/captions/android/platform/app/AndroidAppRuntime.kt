@@ -17,6 +17,8 @@ import com.captions.android.platform.translation.GoogleOnDeviceTranslator
 import com.captions.android.platform.translation.GoogleTranslationModelManager
 import com.captions.android.platform.translation.OpenAICompatibleTranslator
 import com.captions.android.platform.translation.UrlConnectionHttpClient
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class AndroidAppRuntime(context: Context) : AutoCloseable {
     private val appContext = context.applicationContext
@@ -25,6 +27,8 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     val sessionStore = SessionStore(settingsStore)
     val recognitionModelManager = AndroidNemotronModelManager(appContext)
     val translationModelManager = GoogleTranslationModelManager(appContext)
+    private val mutableAppVisible = MutableStateFlow(false)
+    val appVisible = mutableAppVisible.asStateFlow()
 
     private val translationSession = RealtimeTranslationSession(
         UrlConnectionHttpClient().let { httpClient ->
@@ -50,6 +54,10 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     fun applyTranslationSettings() {
         translationSession.cancelPending()
         translationModelManager.configure(sessionStore.state.value.translationSettings)
+    }
+
+    fun setAppVisible(visible: Boolean) {
+        mutableAppVisible.value = visible
     }
 
     override fun close() {

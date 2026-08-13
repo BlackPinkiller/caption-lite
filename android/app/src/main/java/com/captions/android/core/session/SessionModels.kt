@@ -12,6 +12,12 @@ enum class FontChoice {
     Monospace,
 }
 
+enum class OverlayPosition {
+    Free,
+    Top,
+    Bottom,
+}
+
 enum class RecognitionEngine {
     Nemotron,
     AndroidSystem,
@@ -44,6 +50,9 @@ data class AppearanceSettings(
     val fontChoice: FontChoice = FontChoice.System,
     val sourceSizeSp: Int = 15,
     val translationSizeSp: Int = 17,
+    val overlayEnabled: Boolean = false,
+    val overlayBackgroundEnabled: Boolean = true,
+    val overlayPosition: OverlayPosition = OverlayPosition.Bottom,
 )
 
 data class SessionEntry(
@@ -61,6 +70,9 @@ data class SessionUiState(
     val fontChoice: FontChoice = FontChoice.System,
     val sourceSizeSp: Int = 15,
     val translationSizeSp: Int = 17,
+    val overlayEnabled: Boolean = false,
+    val overlayBackgroundEnabled: Boolean = true,
+    val overlayPosition: OverlayPosition = OverlayPosition.Bottom,
     val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
     val translationSettings: TranslationSettings = TranslationSettings(),
     val entries: List<SessionEntry> = emptyList(),

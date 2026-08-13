@@ -17,6 +17,9 @@ class SessionStore(
                 fontChoice = it.fontChoice,
                 sourceSizeSp = it.sourceSizeSp,
                 translationSizeSp = it.translationSizeSp,
+                overlayEnabled = it.overlayEnabled,
+                overlayBackgroundEnabled = it.overlayBackgroundEnabled,
+                overlayPosition = it.overlayPosition,
                 recognitionEngine = settingsStore.loadRecognitionEngine(),
                 translationSettings = settingsStore.loadTranslation(),
             )
@@ -73,6 +76,21 @@ class SessionStore(
         saveAppearance()
     }
 
+    override fun setOverlayEnabled(enabled: Boolean) {
+        mutableState.value = mutableState.value.copy(overlayEnabled = enabled)
+        saveAppearance()
+    }
+
+    override fun setOverlayBackgroundEnabled(enabled: Boolean) {
+        mutableState.value = mutableState.value.copy(overlayBackgroundEnabled = enabled)
+        saveAppearance()
+    }
+
+    override fun setOverlayPosition(position: OverlayPosition) {
+        mutableState.value = mutableState.value.copy(overlayPosition = position)
+        saveAppearance()
+    }
+
     override fun setRecognitionEngine(engine: RecognitionEngine) {
         mutableState.value = mutableState.value.copy(recognitionEngine = engine, message = "")
         settingsStore.saveRecognitionEngine(engine)
@@ -113,6 +131,9 @@ class SessionStore(
                 fontChoice = current.fontChoice,
                 sourceSizeSp = current.sourceSizeSp,
                 translationSizeSp = current.translationSizeSp,
+                overlayEnabled = current.overlayEnabled,
+                overlayBackgroundEnabled = current.overlayBackgroundEnabled,
+                overlayPosition = current.overlayPosition,
             ),
         )
     }

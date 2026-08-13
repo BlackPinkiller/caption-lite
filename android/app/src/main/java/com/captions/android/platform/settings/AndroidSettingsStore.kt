@@ -4,6 +4,7 @@ import android.content.Context
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
+import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.core.session.TranslationEngine
@@ -25,6 +26,12 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         ),
         sourceSizeSp = preferences.getInt(KEY_SOURCE_SIZE, 15).coerceIn(12, 40),
         translationSizeSp = preferences.getInt(KEY_TRANSLATION_SIZE, 17).coerceIn(12, 40),
+        overlayEnabled = preferences.getBoolean(KEY_OVERLAY_ENABLED, false),
+        overlayBackgroundEnabled = preferences.getBoolean(KEY_OVERLAY_BACKGROUND, true),
+        overlayPosition = enumValue(
+            preferences.getString(KEY_OVERLAY_POSITION, null),
+            OverlayPosition.Bottom,
+        ),
     )
 
     override fun saveAppearance(settings: AppearanceSettings) {
@@ -33,6 +40,9 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
             .putString(KEY_FONT_CHOICE, settings.fontChoice.name)
             .putInt(KEY_SOURCE_SIZE, settings.sourceSizeSp)
             .putInt(KEY_TRANSLATION_SIZE, settings.translationSizeSp)
+            .putBoolean(KEY_OVERLAY_ENABLED, settings.overlayEnabled)
+            .putBoolean(KEY_OVERLAY_BACKGROUND, settings.overlayBackgroundEnabled)
+            .putString(KEY_OVERLAY_POSITION, settings.overlayPosition.name)
             .apply()
     }
 
@@ -93,6 +103,9 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_FONT_CHOICE = "font_choice"
         const val KEY_SOURCE_SIZE = "source_size"
         const val KEY_TRANSLATION_SIZE = "translation_size"
+        const val KEY_OVERLAY_ENABLED = "overlay_enabled"
+        const val KEY_OVERLAY_BACKGROUND = "overlay_background"
+        const val KEY_OVERLAY_POSITION = "overlay_position"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
         const val KEY_TRANSLATION_ENABLED = "translation_enabled"
         const val KEY_TRANSLATION_ENGINE = "translation_engine"

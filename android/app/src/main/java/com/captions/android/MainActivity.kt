@@ -1,8 +1,11 @@
 package com.captions.android
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -27,6 +30,7 @@ import com.captions.android.ui.theme.CaptionsTheme
 class MainActivity : ComponentActivity() {
     private var startAfterMicrophonePermission = false
     private var startAfterNotificationPermission = false
+    private var enableOverlayAfterPermission = false
     private val runtime
         get() = (application as CaptionsApplication).runtime
     private val sessionViewModel: SessionViewModel by viewModels {
@@ -57,10 +61,26 @@ class MainActivity : ComponentActivity() {
         startAfterNotificationPermission = false
     }
 
+    private val overlayPermission = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        if (enableOverlayAfterPermission) {
+            if (Settings.canDrawOverlays(this)) {
+                sessionViewModel.setOverlayEnabled(true)
+            } else {
+                sessionViewModel.showMessage("需要悬浮窗权限才能显示字幕")
+            }
+        }
+        enableOverlayAfterPermission = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         translationModelManager.configure(sessionViewModel.state.value.translationSettings)
+        if (sessionViewModel.state.value.overlayEnabled && !Settings.canDrawOverlays(this)) {
+            sessionViewModel.setOverlayEnabled(false)
+        }
 
         setContent {
             val state by sessionViewModel.state.collectAsStateWithLifecycle()
@@ -126,6 +146,9 @@ class MainActivity : ComponentActivity() {
                             onFontChoiceChanged = sessionViewModel::setFontChoice,
                             onSourceSizeChanged = sessionViewModel::setSourceSize,
                             onTranslationSizeChanged = sessionViewModel::setTranslationSize,
+                            onOverlayEnabledChanged = ::setOverlayEnabled,
+                            onOverlayBackgroundChanged = sessionViewModel::setOverlayBackgroundEnabled,
+                            onOverlayPositionChanged = sessionViewModel::setOverlayPosition,
                             onDismiss = { settingsOpen = false },
                         )
                     }
@@ -159,6 +182,32 @@ class MainActivity : ComponentActivity() {
     private fun startSession() {
         CaptionSessionService.start(this)
         sessionController.start()
+    }
+
+    private fun setOverlayEnabled(enabled: Boolean) {
+        if (!enabled) {
+            sessionViewModel.setOverlayEnabled(false)
+        } else if (Settings.canDrawOverlays(this)) {
+            sessionViewModel.setOverlayEnabled(true)
+        } else {
+            enableOverlayAfterPermission = true
+            overlayPermission.launch(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        runtime.setAppVisible(true)
+    }
+
+    override fun onStop() {
+        runtime.setAppVisible(false)
+        super.onStop()
     }
 
     override fun onDestroy() {
