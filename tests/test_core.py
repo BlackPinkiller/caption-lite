@@ -18,8 +18,9 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, QThread, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
+from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -74,6 +75,8 @@ from captions.platforms.android.audio_source import (
     AndroidMicrophoneAudioSource,
     _pcm16le_to_float32,
 )
+from captions.platforms.android.ui.session_model import SessionListModel
+from captions.platforms.android.ui.view_model import AndroidViewModel
 from captions.platforms.audio_source import create_audio_source
 from captions.platforms.runtime import is_android_runtime
 from captions.platforms.windows.audio_source import _record_soundcard_samples
@@ -1413,6 +1416,51 @@ class AndroidPlatformTests(unittest.TestCase):
 
         self.assertIsInstance(source, AndroidMicrophoneAudioSource)
         self.assertEqual(source.capture_kind, AudioCaptureKind.MICROPHONE)
+
+    def test_mobile_session_model_keeps_one_mutable_current_item(self) -> None:
+        model = SessionListModel()
+
+        model.set_current(1, " First ", " 第一 ")
+        model.set_current(1, "First update", "第一条更新")
+
+        self.assertEqual(model.rowCount(), 1)
+        index = model.index(0, 0)
+        self.assertEqual(model.data(index, model.SourceRole), "First update")
+        self.assertTrue(model.data(index, model.CurrentRole))
+
+        model.commit_current()
+        model.set_current(2, "Second")
+
+        self.assertEqual(model.rowCount(), 2)
+        self.assertFalse(model.data(model.index(0, 0), model.CurrentRole))
+        self.assertTrue(model.data(model.index(1, 0), model.CurrentRole))
+        self.assertTrue(model.set_translation(1, "迟到的译文"))
+        self.assertEqual(
+            model.data(model.index(0, 0), model.TranslationRole),
+            "迟到的译文",
+        )
+
+    def test_android_main_qml_loads_with_the_real_view_model(self) -> None:
+        qt_app = QApplication.instance() or QApplication([])
+        engine = QQmlApplicationEngine()
+        view_model = AndroidViewModel(engine)
+        engine.rootContext().setContextProperty("viewModel", view_model)
+        qml_path = (
+            Path(__file__).resolve().parents[1]
+            / "captions"
+            / "platforms"
+            / "android"
+            / "ui"
+            / "Main.qml"
+        )
+
+        engine.load(str(qml_path))
+        qt_app.processEvents()
+
+        self.assertEqual(len(engine.rootObjects()), 1)
+        engine.rootObjects()[0].close()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 class CaptionStateTests(unittest.TestCase):
