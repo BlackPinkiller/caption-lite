@@ -14,15 +14,16 @@ class QueuedTranslationSessionTest {
         var worker: Thread? = null
         val completed = CountDownLatch(1)
         var result = ""
-        val session = QueuedTranslationSession { text, _ ->
+        val session = QueuedTranslationSession { input, _ ->
             worker = Thread.currentThread()
-            "译文：$text"
+            "译文：${input.text}"
         }
 
         assertTrue(
             session.submit(
                 cueId = 7,
                 text = "source",
+                context = listOf("earlier"),
                 settings = TranslationSettings(),
                 onResult = { cueId, text ->
                     result = "$cueId:$text"
@@ -45,6 +46,7 @@ class QueuedTranslationSessionTest {
         val accepted = session.submit(
             cueId = 1,
             text = "source",
+            context = emptyList(),
             settings = TranslationSettings(enabled = false),
             onResult = { _, _ -> },
             onError = {},

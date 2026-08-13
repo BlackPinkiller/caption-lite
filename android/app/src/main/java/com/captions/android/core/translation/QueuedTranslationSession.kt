@@ -2,6 +2,7 @@ package com.captions.android.core.translation
 
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 import com.captions.android.ports.TranslationSession
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -25,6 +26,7 @@ class QueuedTranslationSession(
     override fun submit(
         cueId: Long,
         text: String,
+        context: List<String>,
         settings: TranslationSettings,
         onResult: (Long, String) -> Unit,
         onError: (String) -> Unit,
@@ -34,7 +36,12 @@ class QueuedTranslationSession(
         return runCatching {
             executor.execute {
                 if (currentGeneration != generation.get()) return@execute
-                runCatching { translator.translate(text.trim(), settings) }
+                runCatching {
+                    translator.translate(
+                        TranslationInput(text.trim(), context.toList()),
+                        settings,
+                    )
+                }
                     .onSuccess { translated ->
                         if (currentGeneration == generation.get() && translated.isNotBlank()) {
                             onResult(cueId, translated.trim())

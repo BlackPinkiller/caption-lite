@@ -3,15 +3,18 @@ package com.captions.android.core.translation
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 
 class TranslationRouter(
     private val local: TextTranslator,
     private val google2: TextTranslator,
     private val deepL: TextTranslator,
+    private val openAICompatible: TextTranslator,
 ) : TextTranslator {
-    override fun translate(text: String, settings: TranslationSettings): String = when (settings.engine) {
-        TranslationEngine.GoogleOnDevice -> local.translate(text, settings)
-        TranslationEngine.Google2 -> google2.translate(text, settings)
-        TranslationEngine.DeepL -> deepL.translate(text, settings)
+    override fun translate(input: TranslationInput, settings: TranslationSettings): String = when (settings.engine) {
+        TranslationEngine.GoogleOnDevice -> local.translate(input, settings)
+        TranslationEngine.Google2 -> google2.translate(input, settings)
+        TranslationEngine.DeepL -> deepL.translate(input, settings)
+        TranslationEngine.OpenAICompatible -> openAICompatible.translate(input, settings)
     }
 }

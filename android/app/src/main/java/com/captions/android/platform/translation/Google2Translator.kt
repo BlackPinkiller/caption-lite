@@ -4,6 +4,7 @@ import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.HttpClient
 import com.captions.android.ports.HttpRequest
 import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 import org.json.JSONArray
 
 class Google2Translator(
@@ -12,11 +13,11 @@ class Google2Translator(
     @Volatile
     private var apiKey: String = ""
 
-    override fun translate(text: String, settings: TranslationSettings): String {
+    override fun translate(input: TranslationInput, settings: TranslationSettings): String {
         val key = apiKey.ifEmpty { acquireApiKey(settings.timeoutMillis).also { apiKey = it } }
         val payload = JSONArray().apply {
             put(JSONArray().apply {
-                put(JSONArray().put(text))
+                put(JSONArray().put(input.text))
                 put(googleCode(settings.sourceLanguage))
                 put(googleCode(settings.targetLanguage))
             })

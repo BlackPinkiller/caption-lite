@@ -143,6 +143,26 @@ class AndroidSessionControllerTest {
         assertEquals("完整译文", viewModel.state.value.entries.single().translation)
     }
 
+    @Test
+    fun completedCuesProvideEarlierSourcesAsTranslationContext() {
+        val recognition = FakeSampleRecognitionSession()
+        val translation = FakeTranslationSession()
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = SessionViewModel(MemorySettingsStore()),
+            recognitionSession = recognition,
+            translationSession = translation,
+        )
+
+        controller.start()
+        recognition.ready()
+        recognition.update(RecognitionUpdate("first", endpoint = true))
+        recognition.update(RecognitionUpdate("second", endpoint = true))
+
+        assertEquals(emptyList<String>(), translation.contexts[0])
+        assertEquals(listOf("first"), translation.contexts[1])
+    }
+
     private class FakeAudioInput : AudioInput {
         override var running = false
         var startCount = 0
@@ -203,16 +223,19 @@ class AndroidSessionControllerTest {
 
     private class FakeTranslationSession : TranslationSession {
         val submissions = mutableListOf<Pair<Long, String>>()
+        val contexts = mutableListOf<List<String>>()
         private var resultCallback: (Long, String) -> Unit = { _, _ -> }
 
         override fun submit(
             cueId: Long,
             text: String,
+            context: List<String>,
             settings: TranslationSettings,
             onResult: (Long, String) -> Unit,
             onError: (String) -> Unit,
         ): Boolean {
             submissions += cueId to text
+            contexts += context
             resultCallback = onResult
             return true
         }

@@ -4,17 +4,18 @@ import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.HttpClient
 import com.captions.android.ports.HttpRequest
 import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 import org.json.JSONArray
 import org.json.JSONObject
 
 class DeepLTranslator(
     private val client: HttpClient,
 ) : TextTranslator {
-    override fun translate(text: String, settings: TranslationSettings): String {
+    override fun translate(input: TranslationInput, settings: TranslationSettings): String {
         val apiKey = settings.deeplApiKey.trim()
         require(apiKey.isNotEmpty()) { "请填写 DeepL API 密钥" }
         val payload = JSONObject().apply {
-            put("text", JSONArray().put(text))
+            put("text", JSONArray().put(input.text))
             put("source_lang", deepLCode(settings.sourceLanguage))
             put("target_lang", deepLCode(settings.targetLanguage, target = true))
         }

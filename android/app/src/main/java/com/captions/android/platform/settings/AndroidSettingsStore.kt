@@ -57,6 +57,15 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         deeplPro = preferences.getBoolean(KEY_DEEPL_PRO, false),
         timeoutMillis = preferences.getInt(KEY_TRANSLATION_TIMEOUT, 15_000)
             .coerceIn(3_000, 120_000),
+        llmBaseUrl = preferences.getString(KEY_LLM_BASE_URL, "https://api.openai.com/v1")
+            ?: "https://api.openai.com/v1",
+        llmModel = preferences.getString(KEY_LLM_MODEL, "") ?: "",
+        llmApiKey = secretStore.read(KEY_LLM_API_KEY),
+        llmPromptTemplate = preferences.getString(
+            KEY_LLM_PROMPT,
+            com.captions.android.core.translation.DEFAULT_LLM_PROMPT,
+        ) ?: com.captions.android.core.translation.DEFAULT_LLM_PROMPT,
+        contextSegments = preferences.getInt(KEY_CONTEXT_SEGMENTS, 3).coerceIn(0, 12),
     )
 
     override fun saveTranslation(settings: TranslationSettings) {
@@ -67,8 +76,13 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
             .putString(KEY_TARGET_LANGUAGE, settings.targetLanguage)
             .putBoolean(KEY_DEEPL_PRO, settings.deeplPro)
             .putInt(KEY_TRANSLATION_TIMEOUT, settings.timeoutMillis)
+            .putString(KEY_LLM_BASE_URL, settings.llmBaseUrl.trim())
+            .putString(KEY_LLM_MODEL, settings.llmModel.trim())
+            .putString(KEY_LLM_PROMPT, settings.llmPromptTemplate)
+            .putInt(KEY_CONTEXT_SEGMENTS, settings.contextSegments.coerceIn(0, 12))
             .apply()
         secretStore.write(KEY_DEEPL_API_KEY, settings.deeplApiKey.trim())
+        secretStore.write(KEY_LLM_API_KEY, settings.llmApiKey.trim())
     }
 
     private inline fun <reified T : Enum<T>> enumValue(value: String?, fallback: T): T =
@@ -87,5 +101,10 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_DEEPL_API_KEY = "deepl_api_key"
         const val KEY_DEEPL_PRO = "deepl_pro"
         const val KEY_TRANSLATION_TIMEOUT = "translation_timeout"
+        const val KEY_LLM_BASE_URL = "llm_base_url"
+        const val KEY_LLM_MODEL = "llm_model"
+        const val KEY_LLM_API_KEY = "llm_api_key"
+        const val KEY_LLM_PROMPT = "llm_prompt"
+        const val KEY_CONTEXT_SEGMENTS = "translation_context_segments"
     }
 }

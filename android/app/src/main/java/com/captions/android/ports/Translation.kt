@@ -3,14 +3,20 @@ package com.captions.android.ports
 import com.captions.android.core.session.TranslationSettings
 import kotlinx.coroutines.flow.StateFlow
 
+data class TranslationInput(
+    val text: String,
+    val context: List<String> = emptyList(),
+)
+
 fun interface TextTranslator {
-    fun translate(text: String, settings: TranslationSettings): String
+    fun translate(input: TranslationInput, settings: TranslationSettings): String
 }
 
 interface TranslationSession : AutoCloseable {
     fun submit(
         cueId: Long,
         text: String,
+        context: List<String>,
         settings: TranslationSettings,
         onResult: (Long, String) -> Unit,
         onError: (String) -> Unit,

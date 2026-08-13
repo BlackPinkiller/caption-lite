@@ -3,6 +3,7 @@ package com.captions.android.core.translation
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -13,6 +14,7 @@ class TranslationRouterTest {
             local = named("local"),
             google2 = named("google"),
             deepL = named("deepl"),
+            openAICompatible = named("llm"),
         )
 
         TranslationEngine.entries.forEach { engine ->
@@ -20,8 +22,12 @@ class TranslationRouterTest {
                 TranslationEngine.GoogleOnDevice -> "local"
                 TranslationEngine.Google2 -> "google"
                 TranslationEngine.DeepL -> "deepl"
+                TranslationEngine.OpenAICompatible -> "llm"
             }
-            assertEquals(expected, router.translate("text", TranslationSettings(engine = engine)))
+            assertEquals(
+                expected,
+                router.translate(TranslationInput("text"), TranslationSettings(engine = engine)),
+            )
         }
     }
 

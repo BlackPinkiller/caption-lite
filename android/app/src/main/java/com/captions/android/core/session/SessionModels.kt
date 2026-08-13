@@ -21,6 +21,7 @@ enum class TranslationEngine {
     GoogleOnDevice,
     Google2,
     DeepL,
+    OpenAICompatible,
 }
 
 data class TranslationSettings(
@@ -31,6 +32,11 @@ data class TranslationSettings(
     val deeplApiKey: String = "",
     val deeplPro: Boolean = false,
     val timeoutMillis: Int = 15_000,
+    val llmBaseUrl: String = "https://api.openai.com/v1",
+    val llmModel: String = "",
+    val llmApiKey: String = "",
+    val llmPromptTemplate: String = com.captions.android.core.translation.DEFAULT_LLM_PROMPT,
+    val contextSegments: Int = 3,
 )
 
 data class AppearanceSettings(

@@ -95,9 +95,16 @@ class AndroidSessionController(
             val source = viewModel.state.value.entries.lastOrNull { it.cueId == currentCueId }?.source.orEmpty()
             val translationSettings = viewModel.state.value.translationSettings
             if (translationSettings.enabled && source.isNotBlank()) {
+                val context = viewModel.state.value.entries
+                    .asSequence()
+                    .filter { it.cueId != currentCueId && it.source.isNotBlank() }
+                    .map { it.source }
+                    .toList()
+                    .takeLast(translationSettings.contextSegments)
                 val accepted = translationSession?.submit(
                     cueId = currentCueId,
                     text = source,
+                    context = context,
                     settings = translationSettings,
                     onResult = viewModel::updateTranslation,
                     onError = viewModel::showMessage,

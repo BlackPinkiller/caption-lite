@@ -32,6 +32,7 @@ import com.captions.android.platform.translation.GoogleTranslationModelManager
 import com.captions.android.platform.translation.Google2Translator
 import com.captions.android.platform.translation.DeepLTranslator
 import com.captions.android.platform.translation.UrlConnectionHttpClient
+import com.captions.android.platform.translation.OpenAICompatibleTranslator
 import com.captions.android.ui.settings.SettingsPanel
 import com.captions.android.ui.session.SessionScreen
 import com.captions.android.ui.session.SessionViewModel
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 local = GoogleOnDeviceTranslator(translationModelManager),
                 google2 = Google2Translator(httpClient),
                 deepL = DeepLTranslator(httpClient),
+                openAICompatible = OpenAICompatibleTranslator(httpClient),
             ),
         )
     }

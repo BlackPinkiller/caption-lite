@@ -40,6 +40,7 @@ import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.core.session.TranslationEngine
+import com.captions.android.core.translation.DEFAULT_LLM_PROMPT
 import com.captions.android.ports.ModelPhase
 import com.captions.android.ports.ModelState
 
@@ -148,6 +149,7 @@ private fun TranslationSettingsGroup(
     onChanged: (TranslationSettings) -> Unit,
     onDownloadModel: () -> Unit,
 ) {
+    var advancedOpen by remember { mutableStateOf(false) }
     SettingGroup(label = "翻译") {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -161,6 +163,7 @@ private fun TranslationSettingsGroup(
                             TranslationEngine.GoogleOnDevice -> "Google 本地"
                             TranslationEngine.Google2 -> "Google"
                             TranslationEngine.DeepL -> "DeepL"
+                            TranslationEngine.OpenAICompatible -> "LLM"
                         }
                     } else {
                         "已关闭"
@@ -180,7 +183,14 @@ private fun TranslationSettingsGroup(
                 choices = listOf(
                     TranslationEngine.GoogleOnDevice to "Google 本地",
                     TranslationEngine.Google2 to "Google",
+                ),
+                selected = settings.engine,
+                onSelected = { onChanged(settings.copy(engine = it)) },
+            )
+            ChoiceRow(
+                choices = listOf(
                     TranslationEngine.DeepL to "DeepL",
+                    TranslationEngine.OpenAICompatible to "LLM",
                 ),
                 selected = settings.engine,
                 onSelected = { onChanged(settings.copy(engine = it)) },
@@ -245,6 +255,56 @@ private fun TranslationSettingsGroup(
                         selected = settings.deeplPro,
                         onSelected = { onChanged(settings.copy(deeplPro = it)) },
                     )
+                }
+                TranslationEngine.OpenAICompatible -> {
+                    OutlinedTextField(
+                        value = settings.llmModel,
+                        onValueChange = { onChanged(settings.copy(llmModel = it)) },
+                        label = { Text("模型") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = settings.llmApiKey,
+                        onValueChange = { onChanged(settings.copy(llmApiKey = it)) },
+                        label = { Text("API 密钥") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    TextButton(onClick = { advancedOpen = !advancedOpen }) {
+                        Text(if (advancedOpen) "收起高级设置" else "高级设置")
+                    }
+                    if (advancedOpen) {
+                        OutlinedTextField(
+                            value = settings.llmBaseUrl,
+                            onValueChange = { onChanged(settings.copy(llmBaseUrl = it)) },
+                            label = { Text("API 地址") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        SizeSetting(
+                            label = "上下文句数",
+                            value = settings.contextSegments,
+                            onChanged = {
+                                onChanged(settings.copy(contextSegments = it.coerceIn(0, 12)))
+                            },
+                        )
+                        OutlinedTextField(
+                            value = settings.llmPromptTemplate,
+                            onValueChange = { onChanged(settings.copy(llmPromptTemplate = it)) },
+                            label = { Text("提示词") },
+                            minLines = 5,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        TextButton(
+                            onClick = {
+                                onChanged(settings.copy(llmPromptTemplate = DEFAULT_LLM_PROMPT))
+                            },
+                        ) {
+                            Text("恢复默认")
+                        }
+                    }
                 }
             }
         }

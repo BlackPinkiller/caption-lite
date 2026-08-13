@@ -4,6 +4,7 @@ import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.HttpClient
 import com.captions.android.ports.HttpRequest
 import com.captions.android.ports.HttpResponse
+import com.captions.android.ports.TranslationInput
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -23,7 +24,10 @@ class OnlineTranslatorsTest {
             HttpResponse(200, "[[\"你好\"]]"),
         )
 
-        val result = Google2Translator(client).translate("hello", TranslationSettings())
+        val result = Google2Translator(client).translate(
+            TranslationInput("hello"),
+            TranslationSettings(),
+        )
 
         assertEquals("你好", result)
         val request = client.requests.last()
@@ -41,7 +45,7 @@ class OnlineTranslatorsTest {
         )
 
         val result = DeepLTranslator(client).translate(
-            "hello",
+            TranslationInput("hello"),
             TranslationSettings(deeplApiKey = "secret", deeplPro = true),
         )
 
@@ -53,6 +57,34 @@ class OnlineTranslatorsTest {
         val body = JSONObject(request.body!!)
         assertEquals("EN", body.getString("source_lang"))
         assertEquals("ZH-HANS", body.getString("target_lang"))
+    }
+
+    @Test
+    fun openAICompatibleUsesContextAndTheChatCompletionsContract() {
+        val client = RecordingHttpClient(
+            HttpResponse(200, "{\"choices\":[{\"message\":{\"content\":\"你好\"}}]}")
+        )
+
+        val result = OpenAICompatibleTranslator(client).translate(
+            TranslationInput("current", listOf("earlier sentence")),
+            TranslationSettings(
+                llmBaseUrl = "http://localhost:8080/v1/",
+                llmModel = "local-model",
+                llmApiKey = "secret",
+            ),
+        )
+
+        assertEquals("你好", result)
+        val request = client.requests.single()
+        assertEquals("http://localhost:8080/v1/chat/completions", request.url)
+        assertEquals("Bearer secret", request.headers["Authorization"])
+        val body = JSONObject(request.body!!)
+        assertEquals(false, body.getBoolean("stream"))
+        assertEquals("local-model", body.getString("model"))
+        val prompt = body.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertTrue("earlier sentence" in prompt)
+        assertTrue("current" in prompt)
+        assertTrue("secret" !in request.body.orEmpty())
     }
 
     private class RecordingHttpClient(
