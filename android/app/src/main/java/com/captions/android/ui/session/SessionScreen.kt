@@ -111,7 +111,7 @@ fun SessionScreen(
                         top = 54.dp,
                         bottom = 18.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
                 ) {
                     items(state.entries, key = { it.cueId }) { entry ->
                         SessionEntryView(
