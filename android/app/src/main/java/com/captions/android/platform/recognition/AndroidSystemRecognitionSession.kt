@@ -17,6 +17,8 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private var active = false
+    private var runId = 0L
+    private var restartAction: Runnable? = null
     private var onReady: () -> Unit = {}
     private var onUpdate: (RecognitionUpdate) -> Unit = {}
     private var onError: (String) -> Unit = {}
@@ -36,20 +38,18 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
             this.onUpdate = onUpdate
             this.onError = onError
             active = true
-            ensureRecognizer()
-            listen()
+            runId += 1
+            val currentRun = runId
+            releaseRecognizer()
+            recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).apply {
+                setRecognitionListener(listener(currentRun))
+            }
+            listen(currentRun)
         }
     }
 
-    private fun ensureRecognizer() {
-        if (recognizer != null) return
-        recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).apply {
-            setRecognitionListener(listener)
-        }
-    }
-
-    private fun listen() {
-        if (!active) return
+    private fun listen(currentRun: Long) {
+        if (!isActive(currentRun)) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
@@ -64,50 +64,57 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
         recognizer?.startListening(intent)
     }
 
-    private fun restart(delayMillis: Long = RESTART_DELAY_MILLIS) {
-        if (!active) return
-        handler.removeCallbacks(restartAction)
-        handler.postDelayed(restartAction, delayMillis)
+    private fun restart(currentRun: Long, delayMillis: Long = RESTART_DELAY_MILLIS) {
+        if (!isActive(currentRun)) return
+        restartAction?.let(handler::removeCallbacks)
+        restartAction = Runnable { listen(currentRun) }.also {
+            handler.postDelayed(it, delayMillis)
+        }
     }
 
-    private val restartAction = Runnable { listen() }
-
-    private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) = onReady()
+    private fun listener(currentRun: Long) = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            if (isActive(currentRun)) onReady()
+        }
         override fun onBeginningOfSpeech() = Unit
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() = Unit
 
         override fun onError(error: Int) {
-            if (!active) return
+            if (!isActive(currentRun)) return
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-                -> restart()
+                -> restart(currentRun)
 
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> restart(BUSY_RETRY_MILLIS)
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> restart(currentRun, BUSY_RETRY_MILLIS)
                 else -> {
                     active = false
+                    runId += 1
+                    releaseRecognizer()
                     onError(errorMessage(error))
                 }
             }
         }
 
         override fun onResults(results: Bundle) {
+            if (!isActive(currentRun)) return
             resultText(results)?.let { onUpdate(RecognitionUpdate(it, endpoint = true)) }
-            restart()
+            restart(currentRun)
         }
 
         override fun onPartialResults(partialResults: Bundle) {
+            if (!isActive(currentRun)) return
             resultText(partialResults)?.let { onUpdate(RecognitionUpdate(it, endpoint = false)) }
         }
 
         override fun onSegmentResults(segmentResults: Bundle) {
+            if (!isActive(currentRun)) return
             resultText(segmentResults)?.let { onUpdate(RecognitionUpdate(it, endpoint = true)) }
         }
 
-        override fun onEndOfSegmentedSession() = restart()
+        override fun onEndOfSegmentedSession() = restart(currentRun)
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
@@ -120,19 +127,30 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
     override fun stop() {
         runOnMain {
             active = false
-            handler.removeCallbacks(restartAction)
-            recognizer?.cancel()
+            runId += 1
+            restartAction?.let(handler::removeCallbacks)
+            restartAction = null
+            releaseRecognizer()
         }
     }
 
     override fun close() {
         runOnMain {
             active = false
-            handler.removeCallbacks(restartAction)
-            recognizer?.destroy()
-            recognizer = null
+            runId += 1
+            restartAction?.let(handler::removeCallbacks)
+            restartAction = null
+            releaseRecognizer()
         }
     }
+
+    private fun releaseRecognizer() {
+        recognizer?.cancel()
+        recognizer?.destroy()
+        recognizer = null
+    }
+
+    private fun isActive(currentRun: Long): Boolean = active && runId == currentRun
 
     private fun runOnMain(action: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) action() else handler.post(action)

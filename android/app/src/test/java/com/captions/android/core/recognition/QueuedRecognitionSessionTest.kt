@@ -30,6 +30,36 @@ class QueuedRecognitionSessionTest {
         assertEquals(2, recognizer.resetCount)
     }
 
+    @Test
+    fun immediateRestartCannotReuseTheOldRun() {
+        val allowCreation = CountDownLatch(1)
+        val newRunReady = CountDownLatch(1)
+        val recognizer = FakeRecognizer()
+        val session = QueuedRecognitionSession {
+            allowCreation.await(2, TimeUnit.SECONDS)
+            recognizer
+        }
+        var oldReadyCount = 0
+
+        session.start(
+            onReady = { oldReadyCount += 1 },
+            onUpdate = {},
+            onError = { throw AssertionError(it) },
+        )
+        session.stop()
+        session.start(
+            onReady = newRunReady::countDown,
+            onUpdate = {},
+            onError = { throw AssertionError(it) },
+        )
+        allowCreation.countDown()
+
+        assertTrue(newRunReady.await(2, TimeUnit.SECONDS))
+        assertEquals(0, oldReadyCount)
+        assertEquals(2, recognizer.resetCount)
+        session.close()
+    }
+
     private class FakeRecognizer : StreamingRecognizer {
         var acceptCount = 0
         var resetCount = 0
