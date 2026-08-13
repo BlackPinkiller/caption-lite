@@ -528,6 +528,9 @@ class CaptionApplication(QObject):
             self.capture_session.set_auto_standby_seconds(
                 config.asr.auto_standby_seconds
             )
+            self.capture_session.set_silence_min_chars(
+                config.asr.silence_min_chars
+            )
         geometry = self.overlay.geometry()
         config.window.x = geometry.x()
         config.window.y = geometry.y()

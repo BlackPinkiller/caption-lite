@@ -65,6 +65,10 @@ class CaptureSession(QObject):
         if self.worker is not None:
             self.worker.set_auto_standby_seconds(seconds)
 
+    def set_silence_min_chars(self, chars: int) -> None:
+        if self.worker is not None:
+            self.worker.set_silence_min_chars(chars)
+
     def _thread_finished(self) -> None:
         thread = self.thread
         if self.sender() is not thread:

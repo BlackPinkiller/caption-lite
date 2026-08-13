@@ -20,6 +20,18 @@ CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
 
 
+def should_commit_endpoint(
+    text: str,
+    *,
+    vad_endpoint: bool,
+    asr_endpoint: bool,
+    silence_min_chars: int,
+) -> bool:
+    if asr_endpoint:
+        return True
+    return vad_endpoint and len(text.strip()) >= max(1, silence_min_chars)
+
+
 class AutoStandbyDetector:
     def __init__(self, timeout_seconds: int, *, now: float | None = None) -> None:
         self.timeout_seconds = max(0, int(timeout_seconds))
@@ -115,6 +127,7 @@ class AudioAsrWorker(QObject):
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._standby = AutoStandbyDetector(config.asr.auto_standby_seconds)
+        self._silence_min_chars = config.asr.silence_min_chars
 
     @Slot()
     def run(self) -> None:
@@ -177,8 +190,17 @@ class AudioAsrWorker(QObject):
                                     revision += 1
                                     last_text = text
                                     self.partial.emit(text, revision)
-                                if vad_endpoint or update.endpoint:
+                                commit_endpoint = should_commit_endpoint(
+                                    text,
+                                    vad_endpoint=vad_endpoint,
+                                    asr_endpoint=update.endpoint,
+                                    silence_min_chars=self._silence_min_chars,
+                                )
+                                if commit_endpoint:
                                     self.endpoint.emit()
+                                    recognition.reset()
+                                    last_text = ""
+                                elif vad_endpoint and not text.strip():
                                     recognition.reset()
                                     last_text = ""
                 except Exception as error:
@@ -211,3 +233,7 @@ class AudioAsrWorker(QObject):
         woke = self._standby.configure(seconds)
         if woke:
             self.auto_standby_changed.emit(False)
+
+    def set_silence_min_chars(self, chars: int) -> None:
+        self._silence_min_chars = max(1, int(chars))
+        self.config.asr.silence_min_chars = self._silence_min_chars

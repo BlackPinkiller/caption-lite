@@ -379,6 +379,10 @@ class SettingsDialog(QDialog):
         self.silence_endpoint.setSingleStep(0.1)
         self.silence_endpoint.setSuffix(" 秒")
         performance_form.addRow("静音断句等待", self.silence_endpoint)
+        self.silence_min_chars = WheelSafeSpinBox()
+        self.silence_min_chars.setRange(1, 100)
+        self.silence_min_chars.setSuffix(" 字符")
+        performance_form.addRow("静音断句最小字符数", self.silence_min_chars)
         advanced.addWidget(performance_group)
 
         segmentation_group = QGroupBox("分句与实时预览")
@@ -802,6 +806,7 @@ class SettingsDialog(QDialog):
         self._select(self.auto_standby, config.asr.auto_standby_seconds)
         self._select(self.asr_threads, config.asr.num_threads)
         self.silence_endpoint.setValue(config.asr.silence_endpoint_ms / 1000)
+        self.silence_min_chars.setValue(config.asr.silence_min_chars)
         self._select(self.source_lang, config.translation.source_lang)
         self._select(self.target_lang, config.translation.target_lang)
         self._llm_providers = clone_config(config).translation.llm_providers
@@ -899,6 +904,7 @@ class SettingsDialog(QDialog):
         config.asr.auto_standby_seconds = self.auto_standby.currentData()
         config.asr.num_threads = self.asr_threads.currentData()
         config.asr.silence_endpoint_ms = round(self.silence_endpoint.value() * 1000)
+        config.asr.silence_min_chars = self.silence_min_chars.value()
         selected_backend = self.backend.currentData()
         if isinstance(selected_backend, str) and selected_backend.startswith(
             LLM_BACKEND_PREFIX

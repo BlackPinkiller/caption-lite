@@ -35,6 +35,7 @@ from captions.audio_asr import (
     AudioAsrWorker,
     AutoStandbyDetector,
     VadSpeechGate,
+    should_commit_endpoint,
 )
 from captions.config import (
     AppConfig,
@@ -929,6 +930,55 @@ class CaptureLifecycleTests(unittest.TestCase):
         self.assertIs(app.config, new_config)
         self.assertIn("status:正在应用设置并重启识别…", events)
 
+    def test_changing_silence_minimum_updates_the_running_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            old_config = AppConfig()
+            old_config.asr.model_dir = directory
+            for name in ("encoder", "decoder", "joiner", "tokens"):
+                (Path(directory) / getattr(old_config.asr, name)).write_bytes(b"x")
+            new_config = AppConfig()
+            new_config.asr.model_dir = directory
+            new_config.asr.silence_min_chars = 12
+            events: list[str] = []
+            geometry = SimpleNamespace(
+                x=lambda: 10,
+                y=lambda: 20,
+                width=lambda: 800,
+                height=lambda: 200,
+            )
+            app = SimpleNamespace(
+                capturing=True,
+                capture_session=SimpleNamespace(
+                    running=True,
+                    stop=lambda: events.append("stopped"),
+                    set_auto_standby_seconds=lambda value: events.append(
+                        f"standby:{value}"
+                    ),
+                    set_silence_min_chars=lambda value: events.append(
+                        f"minimum:{value}"
+                    ),
+                ),
+                config=old_config,
+                restart_after_stop=False,
+                segmenter=SimpleNamespace(),
+                overlay=SimpleNamespace(
+                    geometry=lambda: geometry,
+                    canvas=SimpleNamespace(set_style=lambda style: None),
+                    set_mode=lambda mode: None,
+                ),
+                model_loaded=True,
+                _save_config=lambda: None,
+                _set_model_status=lambda text: events.append(f"model:{text}"),
+                _set_model_missing=lambda: events.append("missing"),
+                _set_status=lambda text: events.append(f"status:{text}"),
+            )
+
+            CaptionApplication.apply_settings(app, new_config)
+
+        self.assertIn("minimum:12", events)
+        self.assertNotIn("stopped", events)
+        self.assertFalse(app.restart_after_stop)
+
     def test_app_waits_for_translation_shutdown_before_quitting_qt(self) -> None:
         events: list[str] = []
         app = SimpleNamespace(
@@ -987,6 +1037,99 @@ class TaskSessionCleanupTests(unittest.TestCase):
 
 
 class AudioAsrTests(unittest.TestCase):
+    def test_asr_endpoint_commits_an_extremely_short_sentence(self) -> None:
+        self.assertTrue(
+            should_commit_endpoint(
+                "ok.",
+                vad_endpoint=True,
+                asr_endpoint=True,
+                silence_min_chars=20,
+            )
+        )
+
+    def test_vad_endpoint_waits_until_the_source_reaches_the_minimum(self) -> None:
+        self.assertFalse(
+            should_commit_endpoint(
+                "ok.",
+                vad_endpoint=True,
+                asr_endpoint=False,
+                silence_min_chars=4,
+            )
+        )
+        self.assertTrue(
+            should_commit_endpoint(
+                "okay",
+                vad_endpoint=True,
+                asr_endpoint=False,
+                silence_min_chars=4,
+            )
+        )
+
+    def test_short_vad_segment_keeps_the_recognizer_for_following_speech(self) -> None:
+        config = AppConfig()
+        config.asr.silence_min_chars = 4
+        updates = iter(
+            (
+                SimpleNamespace(text="", endpoint=False),
+                SimpleNamespace(text="ok.", endpoint=False),
+                SimpleNamespace(text="ok. continue", endpoint=False),
+            )
+        )
+        resets: list[bool] = []
+        endpoints: list[bool] = []
+
+        class Recognition:
+            def accept(inner_self, samples):
+                update = next(updates)
+                if update.text == "ok. continue":
+                    worker.stop()
+                return update
+
+            def reset(inner_self) -> None:
+                resets.append(True)
+
+        class SpeechGate:
+            def __init__(inner_self, vad) -> None:
+                pass
+
+            def process(inner_self, samples):
+                return [(samples, True)]
+
+            def reset(inner_self) -> None:
+                pass
+
+        class Capture:
+            name = "test"
+
+            def __enter__(inner_self):
+                return inner_self
+
+            def __exit__(inner_self, *args) -> None:
+                pass
+
+            def read(inner_self, frames):
+                return np.zeros((frames, 1), dtype=np.float32)
+
+        backend = SimpleNamespace(
+            create_streaming=lambda current: Recognition(),
+            create_vad=lambda current: object(),
+        )
+        audio_source = SimpleNamespace(
+            open_default_output=lambda **kwargs: Capture()
+        )
+        worker = AudioAsrWorker(
+            config,
+            audio_source=audio_source,
+            recognition_backend=backend,
+        )
+        worker.endpoint.connect(lambda: endpoints.append(True))
+
+        with patch("captions.audio_asr.VadSpeechGate", SpeechGate):
+            worker.run()
+
+        self.assertEqual(endpoints, [True])
+        self.assertEqual(resets, [True, True])
+
     def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:
         calls: list[object] = []
         stream = SimpleNamespace(
@@ -1494,6 +1637,7 @@ class SettingsDialogTests(unittest.TestCase):
             [1, 2, 4, 8],
         )
         self.assertEqual(dialog.silence_endpoint.value(), 0.4)
+        self.assertEqual(dialog.silence_min_chars.value(), 4)
         dialog.close()
 
     def test_sentence_minimum_follows_the_display_mode(self) -> None:
@@ -1745,14 +1889,17 @@ class SettingsDialogTests(unittest.TestCase):
         config = AppConfig()
         config.asr.num_threads = 4
         config.asr.silence_endpoint_ms = 900
+        config.asr.silence_min_chars = 12
         dialog = SettingsDialog(config)
 
         values = dialog.values()
 
         self.assertEqual(dialog.asr_threads.currentData(), 4)
         self.assertEqual(dialog.silence_endpoint.value(), 0.9)
+        self.assertEqual(dialog.silence_min_chars.value(), 12)
         self.assertEqual(values.asr.num_threads, 4)
         self.assertEqual(values.asr.silence_endpoint_ms, 900)
+        self.assertEqual(values.asr.silence_min_chars, 12)
         dialog.close()
 
     def test_recognition_language_only_updates_a_conflicting_source(self) -> None:
@@ -2167,7 +2314,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
             path.write_text(
-                '{"asr":{"num_threads":0,"silence_endpoint_ms":2500}}',
+                '{"asr":{"num_threads":0,"silence_endpoint_ms":2500,"silence_min_chars":0}}',
                 encoding="utf-8",
             )
 
@@ -2175,6 +2322,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(loaded.asr.num_threads, 2)
         self.assertEqual(loaded.asr.silence_endpoint_ms, 1500)
+        self.assertEqual(loaded.asr.silence_min_chars, 1)
 
     def test_outline_width_is_capped_at_one_pixel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2267,6 +2415,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.asr.auto_standby_seconds, 0)
         self.assertEqual(config.asr.num_threads, 2)
         self.assertEqual(config.asr.silence_endpoint_ms, 400)
+        self.assertEqual(config.asr.silence_min_chars, 4)
         self.assertEqual(config.segmentation.preview_min_chars, 4)
         self.assertEqual(config.segmentation.preview_interval_ms, 600)
         self.assertEqual(config.translation.backend, "llama")
@@ -2286,6 +2435,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.asr.auto_standby_seconds, 0)
         self.assertEqual(loaded.asr.num_threads, 2)
         self.assertEqual(loaded.asr.silence_endpoint_ms, 400)
+        self.assertEqual(loaded.asr.silence_min_chars, 4)
         self.assertEqual(loaded.segmentation.preview_min_chars, 4)
         self.assertEqual(loaded.segmentation.preview_interval_ms, 600)
         self.assertEqual(loaded.translation.deepl_api_plan, "free")

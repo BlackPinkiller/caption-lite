@@ -9,7 +9,8 @@
     "language": "en",
     "auto_standby_seconds": 0,
     "num_threads": 2,
-    "silence_endpoint_ms": 400
+    "silence_endpoint_ms": 400,
+    "silence_min_chars": 4
   },
   "translation": {
     "backend": "llama",

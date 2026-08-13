@@ -153,6 +153,7 @@ class AsrConfig:
     auto_standby_seconds: int = 0
     num_threads: int = 2
     silence_endpoint_ms: int = 400
+    silence_min_chars: int = 4
 
 
 @dataclass
@@ -461,6 +462,9 @@ def _normalize_config(config: AppConfig) -> None:
         config.asr.num_threads = defaults.asr.num_threads
     config.asr.silence_endpoint_ms = int(
         _clamp(config.asr.silence_endpoint_ms, 300, 1500)
+    )
+    config.asr.silence_min_chars = int(
+        _clamp(config.asr.silence_min_chars, 1, 100)
     )
 
     if config.translation.backend not in {"llama", "google2", "deepl"}:
