@@ -612,10 +612,16 @@ class SettingsDialog(QDialog):
             "After early nightfall, the yellow lamps would light up here and there.",
             "夜幕初降后，黄色灯光便在各处亮起。",
         )
+        self.style_preview.set_cue(
+            4, "Footsteps echoed along the street.", "脚步声在街道上回响。"
+        )
+        self.style_preview.set_cue(
+            5, "A window opened above the square.", "广场上方的一扇窗户打开了。"
+        )
+        self.style_preview.set_cue(
+            6, "Then the evening bells began to ring.", "随后，晚钟响了起来。"
+        )
         page_layout.addWidget(self.style_preview)
-        preview_hint = QLabel("预览会按当前窗口宽度实际换行；保存后立即应用到字幕。")
-        preview_hint.setStyleSheet("color:#777")
-        page_layout.addWidget(preview_hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -751,7 +757,9 @@ class SettingsDialog(QDialog):
     def _build_glossary(self) -> None:
         page = QWidget()
         layout = QVBoxLayout(page)
-        label = QLabel("每行一个术语，格式：识别文本 = 目标译文。只把当前上下文命中的术语发给 Llama 翻译模型。")
+        label = QLabel(
+            "每行一个术语，格式：原文 = 译文。使用 LLM 翻译时，仅提供当前字幕及上下文中命中的术语。"
+        )
         label.setWordWrap(True)
         layout.addWidget(label)
         self.glossary = QTextEdit()
