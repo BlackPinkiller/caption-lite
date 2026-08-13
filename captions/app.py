@@ -22,7 +22,7 @@ from captions.config import (
     resolve_model_dir,
     save_config,
 )
-from captions.hotkey import HotkeyFilter
+from captions.platforms.global_shortcut import create_global_shortcut
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
 from captions.translation import HistoryRecord
@@ -87,12 +87,11 @@ class CaptionApplication(QObject):
         self.quit_watchdog.timeout.connect(self._force_finish_quit)
         self._restore_geometry()
 
-        self.hotkey = HotkeyFilter(
+        self.hotkey = create_global_shortcut(
             self.config.hotkey.modifiers, self.config.hotkey.virtual_key
         )
-        qt_app.installNativeEventFilter(self.hotkey)
         self.hotkey.activated.connect(self.toggle_lock)
-        self.hotkey.register()
+        self.hotkey.install(qt_app)
 
         self.tray = self._create_tray()
 
@@ -804,7 +803,7 @@ class CaptionApplication(QObject):
             return
         self.closing = True
         self._save_config()
-        self.hotkey.unregister()
+        self.hotkey.uninstall()
         self.translation_session.close()
         if self.download_prompt is not None:
             self.download_prompt.close()
