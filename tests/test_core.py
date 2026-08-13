@@ -48,6 +48,7 @@ from captions.config import (
     model_download_integrity,
     model_download_spec,
     model_is_complete,
+    resolve_model_dir,
     save_config,
     subtitle_style_values,
 )
@@ -1917,6 +1918,35 @@ class HistoryDialogTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_platform_paths_and_secret_store_are_injected_at_the_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "platform-config.json"
+            secret_store = SimpleNamespace(
+                protect=lambda value: f"test-protected:{value}",
+                unprotect=lambda value: value.removeprefix("test-protected:"),
+            )
+            app_paths = SimpleNamespace(
+                config_file=lambda: path,
+                resolve_data_path=lambda value: root / Path(value),
+            )
+            config = AppConfig()
+            config.translation.deepl_api_key = "platform-secret"
+
+            save_config(config, path, secret_store=secret_store)
+            loaded, loaded_path = load_config(
+                app_paths=app_paths,
+                secret_store=secret_store,
+            )
+
+            self.assertEqual(loaded_path, path)
+            self.assertEqual(loaded.translation.deepl_api_key, "platform-secret")
+            self.assertIn("test-protected:platform-secret", path.read_text("utf-8"))
+            self.assertEqual(
+                resolve_model_dir(loaded, app_paths=app_paths),
+                root / loaded.asr.model_dir,
+            )
+
     def test_utf8_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"

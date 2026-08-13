@@ -4,12 +4,14 @@ import copy
 import json
 import os
 import shutil
-import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from captions.secret_store import SecretStoreError, protect_secret, unprotect_secret
+from captions.platforms.portable_paths import DEFAULT_APP_PATHS
+from captions.platforms.secret_store import DEFAULT_SECRET_STORE
+from captions.ports.app_paths import AppPaths
+from captions.ports.secret_store import SecretStore, SecretStoreError
 
 
 MODEL_NAME = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
@@ -132,14 +134,11 @@ MODEL_DOWNLOAD_INTEGRITY = {
 
 
 def application_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+    return DEFAULT_APP_PATHS.application_dir()
 
 
 def bundled_resource_path(name: str) -> Path:
-    bundle_root = Path(getattr(sys, "_MEIPASS", application_dir()))
-    return bundle_root / "resources" / name
+    return DEFAULT_APP_PATHS.bundled_resource(name)
 
 
 @dataclass
@@ -552,8 +551,13 @@ def _normalize_config(config: AppConfig) -> None:
     config.window.height = max(100, config.window.height)
 
 
-def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
-    path = path or application_dir() / "config.json"
+def load_config(
+    path: Path | None = None,
+    *,
+    app_paths: AppPaths = DEFAULT_APP_PATHS,
+    secret_store: SecretStore = DEFAULT_SECRET_STORE,
+) -> tuple[AppConfig, Path]:
+    path = path or app_paths.config_file()
     config = AppConfig()
     if path.exists():
         try:
@@ -657,7 +661,7 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
                     _merge_dataclass(getattr(config, section), values)
     _normalize_config(config)
     try:
-        config.translation.deepl_api_key = unprotect_secret(
+        config.translation.deepl_api_key = secret_store.unprotect(
             config.translation.deepl_api_key
         )
     except SecretStoreError as error:
@@ -665,7 +669,7 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
         setattr(config, "_load_warning", f"无法读取已保存的 DeepL 密钥：{error}")
     for provider in config.translation.llm_providers:
         try:
-            provider.api_key = unprotect_secret(provider.api_key)
+            provider.api_key = secret_store.unprotect(provider.api_key)
         except SecretStoreError as error:
             provider.api_key = ""
             setattr(
@@ -676,17 +680,22 @@ def load_config(path: Path | None = None) -> tuple[AppConfig, Path]:
     return config, path
 
 
-def save_config(config: AppConfig, path: Path) -> None:
+def save_config(
+    config: AppConfig,
+    path: Path,
+    *,
+    secret_store: SecretStore = DEFAULT_SECRET_STORE,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     root = asdict(config)
     key = root["translation"]["deepl_api_key"]
     if key:
-        root["translation"]["deepl_api_key"] = protect_secret(key)
+        root["translation"]["deepl_api_key"] = secret_store.protect(key)
     for provider in root["translation"]["llm_providers"]:
         key = provider["api_key"]
         if key:
-            provider["api_key"] = protect_secret(key)
+            provider["api_key"] = secret_store.protect(key)
     temporary.write_text(
         json.dumps(root, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -698,23 +707,35 @@ def clone_config(config: AppConfig) -> AppConfig:
     return copy.deepcopy(config)
 
 
-def resolve_model_files(config: AppConfig) -> dict[str, Path]:
-    model_dir = resolve_model_dir(config)
+def resolve_model_files(
+    config: AppConfig,
+    *,
+    app_paths: AppPaths = DEFAULT_APP_PATHS,
+) -> dict[str, Path]:
+    model_dir = resolve_model_dir(config, app_paths=app_paths)
     return {
         name: model_dir / getattr(config.asr, name)
         for name in ("encoder", "decoder", "joiner", "tokens")
     }
 
 
-def resolve_model_dir(config: AppConfig) -> Path:
-    model_dir = Path(config.asr.model_dir)
-    if not model_dir.is_absolute():
-        model_dir = application_dir() / model_dir
-    return model_dir
+def resolve_model_dir(
+    config: AppConfig,
+    *,
+    app_paths: AppPaths = DEFAULT_APP_PATHS,
+) -> Path:
+    return app_paths.resolve_data_path(config.asr.model_dir)
 
 
-def model_is_complete(config: AppConfig) -> bool:
-    return all(path.is_file() for path in resolve_model_files(config).values())
+def model_is_complete(
+    config: AppConfig,
+    *,
+    app_paths: AppPaths = DEFAULT_APP_PATHS,
+) -> bool:
+    return all(
+        path.is_file()
+        for path in resolve_model_files(config, app_paths=app_paths).values()
+    )
 
 
 def model_download_spec(config: AppConfig) -> tuple[str, str]:
