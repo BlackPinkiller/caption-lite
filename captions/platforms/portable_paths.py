@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from captions.platforms.runtime import is_android_runtime
-
 
 class PortableAppPaths:
     """Keep configuration and models beside the desktop executable."""
@@ -31,12 +29,4 @@ class PortableAppPaths:
         return resolved
 
 
-def create_app_paths():
-    if is_android_runtime():
-        from captions.platforms.android.app_paths import AndroidAppPaths
-
-        return AndroidAppPaths()
-    return PortableAppPaths()
-
-
-DEFAULT_APP_PATHS = create_app_paths()
+DEFAULT_APP_PATHS = PortableAppPaths()

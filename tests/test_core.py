@@ -18,9 +18,8 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QThread, Qt
+from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QColor, QPalette, QWheelEvent
-from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -70,16 +69,6 @@ from captions.core.prompt_template import (
     PROMPT_PLACEHOLDER_TOKENS,
 )
 from captions.model_download import ModelDownloadWorker
-from captions.platforms.android.app_paths import AndroidAppPaths
-from captions.platforms.android.audio_source import (
-    AndroidMicrophoneAudioSource,
-    _pcm16le_to_float32,
-)
-from captions.platforms.android.permissions import MicrophonePermissionBroker
-from captions.platforms.android.ui.session_model import SessionListModel
-from captions.platforms.android.ui.view_model import AndroidViewModel
-from captions.platforms.audio_source import create_audio_source
-from captions.platforms.runtime import is_android_runtime
 from captions.platforms.windows.audio_source import _record_soundcard_samples
 from captions.ports.audio_source import AudioCaptureKind
 from captions.segmenter import Segmenter
@@ -1369,128 +1358,6 @@ class AudioAsrTests(unittest.TestCase):
         gate = VadSpeechGate(SherpaOnnxRecognitionBackend().create_vad(AppConfig()))
         events = gate.process(np.zeros(16000, dtype=np.float32))
         self.assertEqual(events, [])
-
-
-class AndroidPlatformTests(unittest.TestCase):
-    def test_runtime_detection_uses_the_android_platform_marker(self) -> None:
-        with patch("captions.platforms.runtime.sys.platform", "android"):
-            self.assertTrue(is_android_runtime())
-
-    def test_android_paths_keep_writable_data_separate_from_resources(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            data_root = root / "data"
-            resource_root = root / "bundle"
-            paths = AndroidAppPaths(data_root, resource_root)
-
-            self.assertEqual(paths.application_dir(), data_root)
-            self.assertEqual(paths.config_file(), data_root / "config.json")
-            self.assertEqual(
-                paths.resolve_data_path("models/asr"),
-                data_root / "models" / "asr",
-            )
-            self.assertEqual(
-                paths.bundled_resource("silero.onnx"),
-                resource_root / "resources" / "silero.onnx",
-            )
-
-    def test_android_pcm_conversion_returns_normalized_channels(self) -> None:
-        encoded = np.array(
-            [0, 32767, -32768, 16384],
-            dtype="<i2",
-        ).tobytes()
-
-        samples = _pcm16le_to_float32(encoded, 2)
-
-        self.assertEqual(samples.shape, (2, 2))
-        np.testing.assert_allclose(
-            samples,
-            np.array([[0.0, 32767 / 32768], [-1.0, 0.5]], dtype=np.float32),
-        )
-
-    def test_android_factory_selects_the_microphone_adapter_lazily(self) -> None:
-        with patch(
-            "captions.platforms.audio_source.is_android_runtime",
-            return_value=True,
-        ):
-            source = create_audio_source()
-
-        self.assertIsInstance(source, AndroidMicrophoneAudioSource)
-        self.assertEqual(source.capture_kind, AudioCaptureKind.MICROPHONE)
-
-    def test_mobile_session_model_keeps_one_mutable_current_item(self) -> None:
-        model = SessionListModel()
-
-        model.set_current(1, " First ", " 第一 ")
-        model.set_current(1, "First update", "第一条更新")
-
-        self.assertEqual(model.rowCount(), 1)
-        index = model.index(0, 0)
-        self.assertEqual(model.data(index, model.SourceRole), "First update")
-        self.assertTrue(model.data(index, model.CurrentRole))
-
-        model.commit_current()
-        model.set_current(2, "Second")
-
-        self.assertEqual(model.rowCount(), 2)
-        self.assertFalse(model.data(model.index(0, 0), model.CurrentRole))
-        self.assertTrue(model.data(model.index(1, 0), model.CurrentRole))
-        self.assertTrue(model.set_translation(1, "迟到的译文"))
-        self.assertEqual(
-            model.data(model.index(0, 0), model.TranslationRole),
-            "迟到的译文",
-        )
-
-    def test_microphone_permission_reports_known_status_without_prompting(self) -> None:
-        for status, expected in (
-            (Qt.PermissionStatus.Granted, "granted"),
-            (Qt.PermissionStatus.Denied, "denied"),
-        ):
-            application = SimpleNamespace(
-                checkPermission=lambda permission, value=status: value,
-                requestPermission=Mock(),
-            )
-            broker = MicrophonePermissionBroker(application)
-            events: list[str] = []
-            broker.granted.connect(lambda: events.append("granted"))
-            broker.denied.connect(lambda: events.append("denied"))
-
-            broker.request()
-
-            self.assertEqual(events, [expected])
-            application.requestPermission.assert_not_called()
-
-    def test_mobile_view_model_exposes_only_actionable_error_text(self) -> None:
-        model = AndroidViewModel()
-        changed: list[str] = []
-        model.errorMessageChanged.connect(lambda: changed.append(model.errorMessage))
-
-        model.set_error(" 麦克风权限被拒绝 ")
-        model.clear_error()
-
-        self.assertEqual(changed, ["麦克风权限被拒绝", ""])
-
-    def test_android_main_qml_loads_with_the_real_view_model(self) -> None:
-        qt_app = QApplication.instance() or QApplication([])
-        engine = QQmlApplicationEngine()
-        view_model = AndroidViewModel(engine)
-        engine.rootContext().setContextProperty("viewModel", view_model)
-        qml_path = (
-            Path(__file__).resolve().parents[1]
-            / "captions"
-            / "platforms"
-            / "android"
-            / "ui"
-            / "Main.qml"
-        )
-
-        engine.load(str(qml_path))
-        qt_app.processEvents()
-
-        self.assertEqual(len(engine.rootObjects()), 1)
-        engine.rootObjects()[0].close()
-        engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 class CaptionStateTests(unittest.TestCase):

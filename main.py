@@ -45,12 +45,6 @@ def desktop_main() -> int:
 
 
 def main() -> int:
-    from captions.platforms.runtime import is_android_runtime
-
-    if is_android_runtime():
-        from captions.platforms.android.main import main as android_main
-
-        return android_main()
     return desktop_main()
 
 
