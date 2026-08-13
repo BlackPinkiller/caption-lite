@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,6 +25,7 @@ import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
 import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
 import com.captions.android.platform.session.AndroidSessionController
+import com.captions.android.platform.session.AndroidScreenAwakeController
 import com.captions.android.platform.translation.GoogleOnDeviceTranslator
 import com.captions.android.platform.translation.GoogleTranslationModelManager
 import com.captions.android.ui.settings.SettingsPanel
@@ -54,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private val translationSession by lazy {
         QueuedTranslationSession(GoogleOnDeviceTranslator(translationModelManager))
     }
+    private val screenAwakeController by lazy { AndroidScreenAwakeController(window) }
 
     private val microphonePermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -78,6 +81,12 @@ class MainActivity : ComponentActivity() {
             val modelState by modelManager.state.collectAsStateWithLifecycle()
             val translationModelState by translationModelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
+            DisposableEffect(state.running) {
+                screenAwakeController.setSessionActive(state.running)
+                onDispose {
+                    if (state.running) screenAwakeController.setSessionActive(false)
+                }
+            }
             BackHandler(enabled = settingsOpen) { settingsOpen = false }
             CaptionsTheme {
                 Box {
@@ -145,6 +154,7 @@ class MainActivity : ComponentActivity() {
             PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
+        screenAwakeController.setSessionActive(false)
         sessionController.close()
         modelManager.close()
         translationModelManager.close()
