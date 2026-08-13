@@ -54,7 +54,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation(files("libs/sherpa-onnx-1.13.5.aar"))
-    implementation("org.apache.commons:commons-compress:1.28.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

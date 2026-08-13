@@ -3,15 +3,10 @@ package com.captions.android.platform.model
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import com.captions.android.ports.ModelPhase
 import com.captions.android.ports.ModelState
 import com.captions.android.ports.RecognitionModelManager
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,8 +19,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 
 class AndroidNemotronModelManager(context: Context) : RecognitionModelManager {
     private val appContext = context.applicationContext
@@ -44,12 +37,11 @@ class AndroidNemotronModelManager(context: Context) : RecognitionModelManager {
     override fun refresh() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
+            cleanupLegacyArchive()
             when {
-                isReady() -> mutableState.value = ModelState(ModelPhase.Ready)
-                preferences.contains(KEY_DOWNLOAD_ID) -> monitorDownload(
-                    preferences.getLong(KEY_DOWNLOAD_ID, -1L),
-                )
-                archiveFile().isFile -> prepareArchive()
+                hasReadyMarker() -> mutableState.value = ModelState(ModelPhase.Ready)
+                activeDownloadIds().isNotEmpty() -> monitorDownloads()
+                allModelFilesExist() -> verifyDownloads()
                 else -> mutableState.value = ModelState(ModelPhase.Missing)
             }
         }
@@ -61,108 +53,95 @@ class AndroidNemotronModelManager(context: Context) : RecognitionModelManager {
         }
         monitorJob?.cancel()
         monitorJob = scope.launch {
-            val archive = archiveFile()
-            archive.parentFile?.mkdirs()
-            archive.delete()
-            val request = DownloadManager.Request(Uri.parse(MODEL_URL))
-                .setTitle("Nemotron 语音模型")
-                .setDescription("实时字幕")
-                .setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED,
-                )
-                .setDestinationUri(Uri.fromFile(archive))
-                .setAllowedOverRoaming(false)
-            val id = downloadManager.enqueue(request)
-            preferences.edit().putLong(KEY_DOWNLOAD_ID, id).apply()
-            mutableState.value = ModelState(ModelPhase.Downloading)
-            monitorDownload(id)
+            runCatching {
+                cleanupFailedDownload()
+                modelDirectory().mkdirs()
+                MODEL_FILES.forEach { modelFile ->
+                    val target = File(modelDirectory(), modelFile.name)
+                    val request = DownloadManager.Request(Uri.parse(modelFile.url))
+                        .setTitle("Nemotron · ${modelFile.name}")
+                        .setDescription("实时字幕")
+                        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+                        .setDestinationUri(Uri.fromFile(target))
+                        .setAllowedOverRoaming(false)
+                    preferences.edit()
+                        .putLong(downloadKey(modelFile), downloadManager.enqueue(request))
+                        .apply()
+                }
+            }.onSuccess {
+                mutableState.value = ModelState(ModelPhase.Downloading)
+                monitorDownloads()
+            }.onFailure {
+                cleanupFailedDownload()
+                mutableState.value = ModelState(ModelPhase.Error, detail = "无法开始下载")
+            }
         }
     }
 
-    private suspend fun monitorDownload(id: Long) {
-        if (id < 0) {
-            clearDownload()
-            mutableState.value = ModelState(ModelPhase.Missing)
+    private suspend fun monitorDownloads() {
+        val ids = activeDownloadIds()
+        if (ids.size != MODEL_FILES.size) {
+            cleanupFailedDownload()
+            mutableState.value = ModelState(ModelPhase.Error, detail = "下载已中断，请重试")
             return
         }
         while (scope.isActive) {
-            val result = queryDownload(id)
-            when (result.status) {
-                DownloadManager.STATUS_PENDING,
-                DownloadManager.STATUS_PAUSED,
-                DownloadManager.STATUS_RUNNING,
-                -> mutableState.value = ModelState(
-                    phase = ModelPhase.Downloading,
-                    progressPercent = result.progressPercent,
-                )
-
-                DownloadManager.STATUS_SUCCESSFUL -> {
-                    clearDownload()
-                    prepareArchive()
+            var downloadedBytes = 0L
+            var allFinished = true
+            for ((modelFile, id) in ids) {
+                val result = queryDownload(id)
+                if (result == null || result.status == DownloadManager.STATUS_FAILED) {
+                    cleanupFailedDownload()
+                    mutableState.value = ModelState(ModelPhase.Error, detail = "下载失败，请重试")
                     return
                 }
-
-                DownloadManager.STATUS_FAILED -> {
-                    clearDownload()
-                    mutableState.value = ModelState(
-                        ModelPhase.Error,
-                        detail = "下载失败，请重试",
-                    )
-                    return
+                allFinished = allFinished && result.status == DownloadManager.STATUS_SUCCESSFUL
+                downloadedBytes += if (result.status == DownloadManager.STATUS_SUCCESSFUL) {
+                    modelFile.size
+                } else {
+                    result.downloadedBytes.coerceAtLeast(0L).coerceAtMost(modelFile.size)
                 }
-
-                else -> {
-                    clearDownload()
-                    mutableState.value = ModelState(ModelPhase.Missing)
-                    return
-                }
+            }
+            val progress = ((downloadedBytes * 100) / TOTAL_SIZE).toInt().coerceIn(0, 100)
+            mutableState.value = ModelState(ModelPhase.Downloading, progressPercent = progress)
+            if (allFinished) {
+                verifyDownloads()
+                return
             }
             delay(POLL_INTERVAL_MILLIS)
         }
     }
 
-    private fun queryDownload(id: Long): DownloadResult {
-        val query = DownloadManager.Query().setFilterById(id)
-        downloadManager.query(query).use { cursor ->
-            if (!cursor.moveToFirst()) return DownloadResult(DownloadManager.STATUS_FAILED, 0)
-            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            val downloaded = cursor.getLong(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
+    private fun queryDownload(id: Long): DownloadResult? {
+        downloadManager.query(DownloadManager.Query().setFilterById(id)).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            return DownloadResult(
+                status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+                downloadedBytes = cursor.getLong(
+                    cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
+                ),
             )
-            val total = cursor.getLong(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
-            )
-            val progress = if (total > 0) ((downloaded * 100) / total).toInt() else 0
-            return DownloadResult(status, progress.coerceIn(0, 100))
         }
     }
 
-    private fun prepareArchive() {
+    private fun verifyDownloads() {
         mutableState.value = ModelState(ModelPhase.Preparing)
         runCatching {
-            val archive = archiveFile()
-            require(archive.length() == ARCHIVE_SIZE) { "模型文件大小不正确" }
-            require(archive.sha256() == ARCHIVE_SHA256) { "模型文件校验失败" }
-
-            val staging = File(modelParent(), "$MODEL_NAME.partial")
-            staging.deleteRecursively()
-            staging.mkdirs()
-            extractTarBz2(archive, staging)
-
-            val extracted = File(staging, MODEL_NAME)
-            require(hasModelFiles(extracted)) { "模型文件不完整" }
-            val target = modelDirectory()
-            target.deleteRecursively()
-            Files.move(
-                extracted.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-            )
-            staging.deleteRecursively()
-            archive.delete()
+            MODEL_FILES.forEachIndexed { index, modelFile ->
+                val file = File(modelDirectory(), modelFile.name)
+                require(file.length() == modelFile.size) { "${modelFile.name} 大小不正确" }
+                require(file.sha256() == modelFile.sha256) { "${modelFile.name} 校验失败" }
+                mutableState.value = ModelState(
+                    ModelPhase.Preparing,
+                    progressPercent = ((index + 1) * 100) / MODEL_FILES.size,
+                )
+            }
+            readyMarker().writeText(MODEL_REVISION)
+            clearDownloadIds()
         }.onSuccess {
             mutableState.value = ModelState(ModelPhase.Ready)
         }.onFailure { error ->
+            cleanupFailedDownload()
             mutableState.value = ModelState(
                 ModelPhase.Error,
                 detail = error.message ?: "模型准备失败",
@@ -170,72 +149,92 @@ class AndroidNemotronModelManager(context: Context) : RecognitionModelManager {
         }
     }
 
-    private fun extractTarBz2(archive: File, destination: File) {
-        val root = destination.canonicalFile
-        FileInputStream(archive).use { fileInput ->
-            BZip2CompressorInputStream(fileInput, true).use { compressed ->
-                TarArchiveInputStream(compressed).use { tar ->
-                    var entry = tar.nextEntry
-                    while (entry != null) {
-                        val output = File(root, entry.name).canonicalFile
-                        require(output.path.startsWith(root.path + File.separator)) {
-                            "模型压缩包包含非法路径"
-                        }
-                        if (entry.isDirectory) {
-                            output.mkdirs()
-                        } else {
-                            output.parentFile?.mkdirs()
-                            FileOutputStream(output).use { tar.copyTo(it) }
-                        }
-                        entry = tar.nextEntry
-                    }
-                }
-            }
-        }
+    fun modelDirectory(): File = File(
+        requireNotNull(appContext.getExternalFilesDir(null)),
+        "models/$MODEL_NAME",
+    )
+
+    private fun hasReadyMarker(): Boolean =
+        readyMarker().takeIf(File::isFile)?.readText() == MODEL_REVISION &&
+            MODEL_FILES.all { File(modelDirectory(), it.name).length() == it.size }
+
+    private fun allModelFilesExist(): Boolean = MODEL_FILES.all {
+        File(modelDirectory(), it.name).isFile
     }
 
-    fun modelDirectory(): File = File(modelParent(), MODEL_NAME)
+    private fun readyMarker(): File = File(modelDirectory(), ".ready")
 
-    private fun modelParent(): File = File(appContext.filesDir, "models").apply { mkdirs() }
+    private fun activeDownloadIds(): Map<ModelFile, Long> = MODEL_FILES.mapNotNull { modelFile ->
+        preferences.takeIf { it.contains(downloadKey(modelFile)) }
+            ?.getLong(downloadKey(modelFile), -1L)
+            ?.takeIf { it >= 0L }
+            ?.let { modelFile to it }
+    }.toMap()
 
-    private fun archiveFile(): File {
-        val root = requireNotNull(appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS))
-        return File(root, "$MODEL_NAME.tar.bz2")
+    private fun cleanupFailedDownload() {
+        val ids = activeDownloadIds().values.toLongArray()
+        if (ids.isNotEmpty()) downloadManager.remove(*ids)
+        clearDownloadIds()
+        modelDirectory().deleteRecursively()
     }
 
-    private fun isReady(): Boolean = hasModelFiles(modelDirectory())
-
-    private fun hasModelFiles(directory: File): Boolean = MODEL_FILES.all {
-        File(directory, it).isFile
+    private fun clearDownloadIds() {
+        preferences.edit().also { editor ->
+            MODEL_FILES.forEach { editor.remove(downloadKey(it)) }
+        }.apply()
     }
 
-    private fun clearDownload() {
-        preferences.edit().remove(KEY_DOWNLOAD_ID).apply()
+    private fun cleanupLegacyArchive() {
+        File(appContext.filesDir, "models/$MODEL_NAME.partial").deleteRecursively()
+        File(
+            appContext.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS),
+            "$MODEL_NAME.tar.bz2",
+        ).delete()
+        preferences.edit().remove("nemotron_download_id").apply()
     }
+
+    private fun downloadKey(modelFile: ModelFile): String = "download_${modelFile.name}"
 
     override fun close() {
         scope.cancel()
     }
 
-    private data class DownloadResult(val status: Int, val progressPercent: Int)
+    private data class DownloadResult(val status: Int, val downloadedBytes: Long)
+    private data class ModelFile(val name: String, val size: Long, val sha256: String) {
+        val url: String
+            get() = "$MODEL_BASE_URL/$name?download=true"
+    }
 
     private companion object {
         const val PREFERENCES = "captions_model_downloads"
-        const val KEY_DOWNLOAD_ID = "nemotron_download_id"
         const val POLL_INTERVAL_MILLIS = 750L
         const val MODEL_NAME =
             "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
-        const val MODEL_URL =
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$MODEL_NAME.tar.bz2"
-        const val ARCHIVE_SIZE = 463_945_051L
-        const val ARCHIVE_SHA256 =
-            "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358"
+        const val MODEL_REVISION = "52056fdc070914a48dcd68b31b44d6a6f5b85902"
+        const val MODEL_BASE_URL = "https://huggingface.co/csukuangfj2/$MODEL_NAME/resolve/$MODEL_REVISION"
         val MODEL_FILES = listOf(
-            "encoder.int8.onnx",
-            "decoder.int8.onnx",
-            "joiner.int8.onnx",
-            "tokens.txt",
+            ModelFile(
+                "encoder.int8.onnx",
+                652_916_849L,
+                "7d932213491ad355c6e5576705dc3494731a52af87d7a1b954559340147909d8",
+            ),
+            ModelFile(
+                "decoder.int8.onnx",
+                7_257_753L,
+                "0be9702c2f427a2b6bb241d298e0d3836a558de1f5b9fd3018f1cce6e2b3fa98",
+            ),
+            ModelFile(
+                "joiner.int8.onnx",
+                1_735_862L,
+                "a35eac38a22ebceb04d230ed7afe0d68f446ba6914a036b97f14fece95967e23",
+            ),
+            ModelFile(
+                "tokens.txt",
+                8_952L,
+                "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+            ),
         )
+        val TOTAL_SIZE = MODEL_FILES.sumOf(ModelFile::size)
     }
 }
 

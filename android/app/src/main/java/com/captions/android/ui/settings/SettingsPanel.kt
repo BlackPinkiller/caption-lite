@@ -135,7 +135,7 @@ private fun ModelStatusRow(state: ModelState, onDownload: () -> Unit) {
         ) {
             Text(
                 text = when (state.phase) {
-                    ModelPhase.Missing -> "本地模型 · 约 464 MB"
+                    ModelPhase.Missing -> "本地模型 · 约 662 MB"
                     ModelPhase.Downloading -> "下载中 ${state.progressPercent}%"
                     ModelPhase.Preparing -> "正在准备模型"
                     ModelPhase.Ready -> "准备就绪"
