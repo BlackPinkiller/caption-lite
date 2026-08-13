@@ -158,6 +158,19 @@ ApplicationWindow {
         }
     }
 
+    Label {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: controls.top
+        anchors.bottomMargin: 8
+        width: Math.min(implicitWidth, parent.width - 32)
+        visible: viewModel.errorMessage.length > 0
+        text: viewModel.errorMessage
+        color: "#d8b2b2"
+        font.pixelSize: 12
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.Wrap
+    }
+
     Drawer {
         id: settingsDrawer
         edge: Qt.RightEdge

@@ -75,6 +75,7 @@ from captions.platforms.android.audio_source import (
     AndroidMicrophoneAudioSource,
     _pcm16le_to_float32,
 )
+from captions.platforms.android.permissions import MicrophonePermissionBroker
 from captions.platforms.android.ui.session_model import SessionListModel
 from captions.platforms.android.ui.view_model import AndroidViewModel
 from captions.platforms.audio_source import create_audio_source
@@ -1439,6 +1440,35 @@ class AndroidPlatformTests(unittest.TestCase):
             model.data(model.index(0, 0), model.TranslationRole),
             "迟到的译文",
         )
+
+    def test_microphone_permission_reports_known_status_without_prompting(self) -> None:
+        for status, expected in (
+            (Qt.PermissionStatus.Granted, "granted"),
+            (Qt.PermissionStatus.Denied, "denied"),
+        ):
+            application = SimpleNamespace(
+                checkPermission=lambda permission, value=status: value,
+                requestPermission=Mock(),
+            )
+            broker = MicrophonePermissionBroker(application)
+            events: list[str] = []
+            broker.granted.connect(lambda: events.append("granted"))
+            broker.denied.connect(lambda: events.append("denied"))
+
+            broker.request()
+
+            self.assertEqual(events, [expected])
+            application.requestPermission.assert_not_called()
+
+    def test_mobile_view_model_exposes_only_actionable_error_text(self) -> None:
+        model = AndroidViewModel()
+        changed: list[str] = []
+        model.errorMessageChanged.connect(lambda: changed.append(model.errorMessage))
+
+        model.set_error(" 麦克风权限被拒绝 ")
+        model.clear_error()
+
+        self.assertEqual(changed, ["麦克风权限被拒绝", ""])
 
     def test_android_main_qml_loads_with_the_real_view_model(self) -> None:
         qt_app = QApplication.instance() or QApplication([])

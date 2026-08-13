@@ -12,6 +12,7 @@ class AndroidViewModel(QObject):
     fontFamilyChanged = Signal()
     sourceSizeChanged = Signal()
     translationSizeChanged = Signal()
+    errorMessageChanged = Signal()
     startRequested = Signal()
     pauseRequested = Signal()
     microphoneRequested = Signal(bool)
@@ -25,6 +26,7 @@ class AndroidViewModel(QObject):
         self._font_family = "sans-serif"
         self._source_size = 14
         self._translation_size = 16
+        self._error_message = ""
 
     @Property(QObject, constant=True)
     def sessionModel(self) -> QObject:
@@ -54,6 +56,10 @@ class AndroidViewModel(QObject):
     def translationSize(self) -> int:
         return self._translation_size
 
+    @Property(str, notify=errorMessageChanged)
+    def errorMessage(self) -> str:
+        return self._error_message
+
     @Slot()
     def toggleRunning(self) -> None:
         if self._running:
@@ -78,6 +84,17 @@ class AndroidViewModel(QObject):
             return
         self._microphone_enabled = enabled
         self.microphoneEnabledChanged.emit()
+
+    @Slot(str)
+    def set_error(self, message: str) -> None:
+        message = message.strip()
+        if message == self._error_message:
+            return
+        self._error_message = message
+        self.errorMessageChanged.emit()
+
+    def clear_error(self) -> None:
+        self.set_error("")
 
     def set_appearance(
         self,

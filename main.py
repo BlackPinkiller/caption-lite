@@ -10,7 +10,8 @@ from PySide6.QtCore import QLockFile, QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-def main() -> int:
+
+def desktop_main() -> int:
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     # SoundCard initializes COM while captions.app is imported. Qt must create
@@ -41,6 +42,16 @@ def main() -> int:
     # cooperative shutdown work has completed (or the quit watchdog expired),
     # so do not allow an orphaned Python process to survive.
     os._exit(exit_code)
+
+
+def main() -> int:
+    from captions.platforms.runtime import is_android_runtime
+
+    if is_android_runtime():
+        from captions.platforms.android.main import main as android_main
+
+        return android_main()
+    return desktop_main()
 
 
 if __name__ == "__main__":
