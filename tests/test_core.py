@@ -69,6 +69,13 @@ from captions.core.prompt_template import (
     PROMPT_PLACEHOLDER_TOKENS,
 )
 from captions.model_download import ModelDownloadWorker
+from captions.platforms.android.app_paths import AndroidAppPaths
+from captions.platforms.android.audio_source import (
+    AndroidMicrophoneAudioSource,
+    _pcm16le_to_float32,
+)
+from captions.platforms.audio_source import create_audio_source
+from captions.platforms.runtime import is_android_runtime
 from captions.platforms.windows.audio_source import _record_soundcard_samples
 from captions.ports.audio_source import AudioCaptureKind
 from captions.segmenter import Segmenter
@@ -1205,6 +1212,7 @@ class AudioAsrTests(unittest.TestCase):
         self.assertEqual(endpoints, [True])
         self.assertEqual(resets, [True, True])
 
+
     def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:
         calls: list[object] = []
         stream = SimpleNamespace(
@@ -1357,6 +1365,54 @@ class AudioAsrTests(unittest.TestCase):
         gate = VadSpeechGate(SherpaOnnxRecognitionBackend().create_vad(AppConfig()))
         events = gate.process(np.zeros(16000, dtype=np.float32))
         self.assertEqual(events, [])
+
+
+class AndroidPlatformTests(unittest.TestCase):
+    def test_runtime_detection_uses_the_android_platform_marker(self) -> None:
+        with patch("captions.platforms.runtime.sys.platform", "android"):
+            self.assertTrue(is_android_runtime())
+
+    def test_android_paths_keep_writable_data_separate_from_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root = root / "data"
+            resource_root = root / "bundle"
+            paths = AndroidAppPaths(data_root, resource_root)
+
+            self.assertEqual(paths.application_dir(), data_root)
+            self.assertEqual(paths.config_file(), data_root / "config.json")
+            self.assertEqual(
+                paths.resolve_data_path("models/asr"),
+                data_root / "models" / "asr",
+            )
+            self.assertEqual(
+                paths.bundled_resource("silero.onnx"),
+                resource_root / "resources" / "silero.onnx",
+            )
+
+    def test_android_pcm_conversion_returns_normalized_channels(self) -> None:
+        encoded = np.array(
+            [0, 32767, -32768, 16384],
+            dtype="<i2",
+        ).tobytes()
+
+        samples = _pcm16le_to_float32(encoded, 2)
+
+        self.assertEqual(samples.shape, (2, 2))
+        np.testing.assert_allclose(
+            samples,
+            np.array([[0.0, 32767 / 32768], [-1.0, 0.5]], dtype=np.float32),
+        )
+
+    def test_android_factory_selects_the_microphone_adapter_lazily(self) -> None:
+        with patch(
+            "captions.platforms.audio_source.is_android_runtime",
+            return_value=True,
+        ):
+            source = create_audio_source()
+
+        self.assertIsInstance(source, AndroidMicrophoneAudioSource)
+        self.assertEqual(source.capture_kind, AudioCaptureKind.MICROPHONE)
 
 
 class CaptionStateTests(unittest.TestCase):
