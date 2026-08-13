@@ -55,6 +55,7 @@ from captions.config import (
     save_config,
     subtitle_style_values,
 )
+from captions.core.caption_state import CaptionState
 from captions.model_download import ModelDownloadWorker
 from captions.platforms.windows.audio_source import _record_soundcard_samples
 from captions.segmenter import Segmenter
@@ -1138,6 +1139,33 @@ class AudioAsrTests(unittest.TestCase):
         gate = VadSpeechGate(SherpaOnnxRecognitionBackend().create_vad(AppConfig()))
         events = gate.process(np.zeros(16000, dtype=np.float32))
         self.assertEqual(events, [])
+
+
+class CaptionStateTests(unittest.TestCase):
+    def test_late_translation_updates_a_previous_cue(self) -> None:
+        state = CaptionState()
+        state.set_cue(1, "First sentence", "")
+        state.set_cue(2, "Second sentence", "")
+
+        self.assertTrue(state.set_translation(1, "第一句"))
+        self.assertEqual(state.cue_id, 2)
+        self.assertEqual(state.previous_cues[-1].translation, "第一句")
+
+    def test_bilingual_selection_counts_logical_entries(self) -> None:
+        state = CaptionState()
+        state.set_cue(1, "older", "旧译文")
+        state.set_cue(2, "current", "当前译文")
+
+        entries = state.visible_entries("bilingual", 3, 0.5, 1.0)
+
+        self.assertEqual(
+            [(entry.text, entry.kind) for entry in entries],
+            [
+                ("旧译文", "translation"),
+                ("current", "source"),
+                ("当前译文", "translation"),
+            ],
+        )
 
 
 class CaptionCanvasTests(unittest.TestCase):

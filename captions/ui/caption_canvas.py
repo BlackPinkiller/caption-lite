@@ -15,6 +15,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from captions.config import SubtitleConfig
+from captions.core.caption_state import CaptionCue, CaptionState
 
 
 @dataclass
@@ -22,13 +23,6 @@ class CaptionLine:
     text: str
     kind: str
     opacity: float = 1.0
-
-
-@dataclass
-class CaptionCue:
-    cue_id: int
-    source: str
-    translation: str
 
 
 def parse_color(value: str) -> QColor:
@@ -58,12 +52,41 @@ class CaptionCanvas(QWidget):
         super().__init__(parent)
         self.style = style
         self.preview = preview
-        self.source = ""
-        self.translation = ""
-        self.cue_id = 0
-        self.previous_cues: list[CaptionCue] = []
+        self.state = CaptionState()
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    @property
+    def source(self) -> str:
+        return self.state.source
+
+    @source.setter
+    def source(self, value: str) -> None:
+        self.state.source = value
+
+    @property
+    def translation(self) -> str:
+        return self.state.translation
+
+    @translation.setter
+    def translation(self, value: str) -> None:
+        self.state.translation = value
+
+    @property
+    def cue_id(self) -> int:
+        return self.state.cue_id
+
+    @cue_id.setter
+    def cue_id(self, value: int) -> None:
+        self.state.cue_id = value
+
+    @property
+    def previous_cues(self) -> list[CaptionCue]:
+        return self.state.previous_cues
+
+    @previous_cues.setter
+    def previous_cues(self, value: list[CaptionCue]) -> None:
+        self.state.previous_cues = value
 
     def set_style(self, style: SubtitleConfig) -> None:
         self.style = style
@@ -74,43 +97,21 @@ class CaptionCanvas(QWidget):
         source: str | None = None,
         translation: str | None = None,
     ) -> None:
-        if source is not None:
-            self.source = source
-        if translation is not None:
-            self.translation = translation
+        self.state.set_content(source, translation)
         self.update()
 
     def set_cue(self, cue_id: int, source: str, translation: str) -> None:
-        source = source.strip()
-        translation = translation.strip()
-        if cue_id != self.cue_id:
-            if self.cue_id and (self.source or self.translation):
-                self.previous_cues.append(
-                    CaptionCue(self.cue_id, self.source, self.translation)
-                )
-                self.previous_cues = self.previous_cues[-6:]
-            self.cue_id = cue_id
-        self.source = source
-        self.translation = translation
+        self.state.set_cue(cue_id, source, translation)
         self.update()
 
     def set_translation(self, cue_id: int, translation: str) -> bool:
-        translation = translation.strip()
-        if cue_id == self.cue_id:
-            self.translation = translation
+        if self.state.set_translation(cue_id, translation):
             self.update()
             return True
-        for cue in reversed(self.previous_cues):
-            if cue.cue_id == cue_id:
-                cue.translation = translation
-                self.update()
-                return True
         return False
 
     def clear(self) -> None:
-        self.source = self.translation = ""
-        self.cue_id = 0
-        self.previous_cues.clear()
+        self.state.clear()
         self.update()
 
     def _font(self, kind: str) -> QFont:
@@ -151,75 +152,23 @@ class CaptionCanvas(QWidget):
         return lines
 
     def _visible_lines(self, available: float) -> list[CaptionLine]:
-        mode = self.style.mode
-        minimum = 2 if mode == "bilingual" else 1
-        limit = max(minimum, min(6, self.style.max_sentences))
-        current = CaptionCue(self.cue_id, self.source, self.translation)
-
-        if mode == "source":
-            rows = [
-                (cue.source, "source", self.style.old_opacity)
-                for cue in self.previous_cues
-                if cue.source
-            ]
-            if current.source:
-                rows.append((current.source, "source", self.style.preview_opacity))
-            rows = rows[-limit:]
-        elif mode == "translation":
-            rows = [
-                (cue.translation, "translation", self.style.old_opacity)
-                for cue in self.previous_cues
-                if cue.translation
-            ]
-            if current.translation:
-                rows.append(
-                    (current.translation, "translation", self.style.preview_opacity)
-                )
-            rows = rows[-limit:]
-        else:
-            current_rows: list[tuple[str, str, float]] = []
-            if current.source:
-                current_rows.append(
-                    (current.source, "source", self.style.preview_opacity)
-                )
-            if current.translation:
-                current_rows.append(
-                    (current.translation, "translation", self.style.preview_opacity)
-                )
-            remaining = max(0, limit - len(current_rows))
-            older_groups: list[list[tuple[str, str, float]]] = []
-            for cue in reversed(self.previous_cues):
-                if remaining <= 0:
-                    break
-                pair = [
-                    (cue.source, "source", self.style.old_opacity),
-                    (cue.translation, "translation", self.style.old_opacity),
-                ]
-                pair = [row for row in pair if row[0]]
-                if not pair:
-                    continue
-                if remaining == 1:
-                    older_groups.append([
-                        next(
-                            (row for row in pair if row[1] == "translation"),
-                            pair[-1],
-                        )
-                    ])
-                    remaining = 0
-                else:
-                    selected = pair[-remaining:]
-                    older_groups.append(selected)
-                    remaining -= len(selected)
-            rows = [
-                row for group in reversed(older_groups) for row in group
-            ] + current_rows
-
         visible: list[CaptionLine] = []
-        for text, kind, opacity in rows:
+        entries = self.state.visible_entries(
+            self.style.mode,
+            self.style.max_sentences,
+            self.style.old_opacity,
+            self.style.preview_opacity,
+        )
+        for entry in entries:
             wrapped = self._wrap_text(
-                text, self._font(kind), available, kind == "source"
+                entry.text,
+                self._font(entry.kind),
+                available,
+                entry.kind == "source",
             )
-            visible.extend(CaptionLine(line, kind, opacity) for line in wrapped)
+            visible.extend(
+                CaptionLine(line, entry.kind, entry.opacity) for line in wrapped
+            )
         return visible
 
     def paintEvent(self, event) -> None:  # noqa: N802
