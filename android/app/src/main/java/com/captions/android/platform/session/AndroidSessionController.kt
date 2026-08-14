@@ -2,6 +2,7 @@ package com.captions.android.platform.session
 
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.recognition.RecognitionSegmenter
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionController
@@ -17,6 +18,7 @@ class AndroidSessionController(
     private val recognitionSession: SampleRecognitionSession? = null,
     private val systemRecognitionSession: DirectRecognitionSession? = null,
     private val translationSession: TranslationSession? = null,
+    private val segmenter: RecognitionSegmenter = RecognitionSegmenter(),
 ) : RecognitionController, AutoCloseable {
     private val startRequested = AtomicBoolean(false)
     private var cueId = 1L
@@ -40,6 +42,7 @@ class AndroidSessionController(
 
     private fun startRecognition() {
         if (!startRequested.compareAndSet(false, true)) return
+        segmenter.reset()
         viewModel.beginStarting("正在加载模型")
         recognitionSession?.start(
             onReady = {
@@ -57,6 +60,7 @@ class AndroidSessionController(
             return
         }
         if (!startRequested.compareAndSet(false, true)) return
+        segmenter.reset()
         viewModel.beginStarting("正在启动系统识别")
         session.start(
             onReady = {
@@ -87,28 +91,53 @@ class AndroidSessionController(
     }
 
     private fun onRecognitionUpdate(update: RecognitionUpdate) {
+        var active = segmenter.active
         if (update.text.isNotEmpty()) {
-            viewModel.updateCurrent(cueId, update.text)
+            val segmented = segmenter.update(update.text)
+            if (segmented.committed.isNotBlank()) commitSource(segmented.committed)
+            active = segmented.active
         }
-        val currentCueId = cueId
-        val source = viewModel.state.value.entries
-            .lastOrNull { it.cueId == currentCueId }
-            ?.source
-            .orEmpty()
-        val translationSettings = viewModel.state.value.translationSettings
         if (update.endpoint) {
-            viewModel.commitCurrent()
-            requestFinalTranslation(currentCueId, source, translationSettings)
-            cueId += 1
-        } else if (translationSettings.enabled && source.isNotBlank()) {
+            val flushed = segmenter.flush()
+            if (flushed.committed.isNotBlank()) commitSource(flushed.committed)
+        } else if (active.isNotBlank()) {
+            publishActive(active)
+        }
+    }
+
+    private fun publishActive(source: String) {
+        viewModel.updateCurrent(cueId, source)
+        val translationSettings = viewModel.state.value.translationSettings
+        if (translationSettings.enabled) {
             translationSession?.preview(
-                cueId = currentCueId,
+                cueId = cueId,
                 text = source,
-                context = translationContext(currentCueId, translationSettings.contextSegments),
+                context = translationContext(cueId, translationSettings.contextSegments),
                 settings = translationSettings,
                 onResult = viewModel::updateTranslation,
             )
         }
+    }
+
+    private fun commitSource(source: String) {
+        val committed = source.trim()
+        if (committed.isEmpty()) return
+        val currentCueId = cueId
+        viewModel.updateCurrent(currentCueId, committed)
+        viewModel.commitCurrent()
+        requestFinalTranslation(
+            currentCueId,
+            committed,
+            viewModel.state.value.translationSettings,
+        )
+        cueId += 1
+    }
+
+    private fun commitActiveCue() {
+        val segmented = segmenter.flush(forced = true)
+        val current = viewModel.state.value.entries.lastOrNull()?.takeIf { it.current }
+        val source = segmented.committed.ifBlank { current?.source.orEmpty() }
+        if (source.isNotBlank()) commitSource(source)
     }
 
     private fun requestFinalTranslation(
@@ -143,6 +172,7 @@ class AndroidSessionController(
         recognitionSession?.stop()
         systemRecognitionSession?.stop()
         audioInput.stop()
+        commitActiveCue()
         viewModel.pause()
         viewModel.showMessage(message)
     }
@@ -152,16 +182,7 @@ class AndroidSessionController(
         audioInput.stop()
         recognitionSession?.stop()
         systemRecognitionSession?.stop()
-        val current = viewModel.state.value.entries.lastOrNull()?.takeIf { it.current }
-        if (current != null) {
-            viewModel.commitCurrent()
-            requestFinalTranslation(
-                current.cueId,
-                current.source,
-                viewModel.state.value.translationSettings,
-            )
-            cueId += 1
-        }
+        commitActiveCue()
         viewModel.pause()
     }
 
@@ -171,6 +192,7 @@ class AndroidSessionController(
             audioInput.stop()
             recognitionSession?.stop()
             systemRecognitionSession?.stop()
+            commitActiveCue()
         }
         viewModel.setMicrophoneEnabled(enabled)
         if (enabled && viewModel.state.value.running) {

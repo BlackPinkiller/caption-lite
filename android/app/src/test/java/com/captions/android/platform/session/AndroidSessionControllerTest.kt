@@ -1,6 +1,7 @@
 package com.captions.android.platform.session
 
 import com.captions.android.core.session.AppearanceSettings
+import com.captions.android.core.recognition.RecognitionSegmenter
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.AudioInput
@@ -203,6 +204,101 @@ class AndroidSessionControllerTest {
 
         assertEquals(emptyList<String>(), translation.contexts[0])
         assertEquals(listOf("first"), translation.contexts[1])
+    }
+
+    @Test
+    fun stablePunctuationCommitsBeforeTheRecognizerEndpoint() {
+        val recognition = FakeSampleRecognitionSession()
+        val translation = FakeTranslationSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+            translationSession = translation,
+            segmenter = RecognitionSegmenter(nowMillis = { 1_000L }),
+        )
+        controller.start()
+        recognition.ready()
+
+        recognition.update(RecognitionUpdate("Hello world.", endpoint = false))
+        recognition.update(RecognitionUpdate("Hello world.", endpoint = false))
+
+        assertEquals(listOf(1L to "Hello world."), translation.commits)
+        assertEquals("Hello world.", viewModel.state.value.entries.single().source)
+        assertFalse(viewModel.state.value.entries.single().current)
+    }
+
+    @Test
+    fun emptyEndpointFlushesTheLastPartialInsteadOfDroppingIt() {
+        val recognition = FakeSampleRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+        )
+        controller.start()
+        recognition.ready()
+
+        recognition.update(RecognitionUpdate("keep this partial", endpoint = false))
+        recognition.update(RecognitionUpdate("", endpoint = true))
+
+        assertEquals("keep this partial", viewModel.state.value.entries.single().source)
+        assertFalse(viewModel.state.value.entries.single().current)
+    }
+
+    @Test
+    fun longSpeechCreatesACommittedCueAndKeepsTheTailLive() {
+        val recognition = FakeSampleRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+            segmenter = RecognitionSegmenter(
+                maxChars = 20,
+                splitLookbackChars = 4,
+                splitLookaheadChars = 5,
+                nowMillis = { 1_000L },
+            ),
+        )
+        controller.start()
+        recognition.ready()
+
+        recognition.update(
+            RecognitionUpdate("one two three four five six", endpoint = false),
+        )
+
+        assertEquals(2, viewModel.state.value.entries.size)
+        assertFalse(viewModel.state.value.entries.first().current)
+        assertTrue(viewModel.state.value.entries.last().current)
+        assertEquals("six", viewModel.state.value.entries.last().source)
+    }
+
+    @Test
+    fun disablingTheMicrophoneCommitsTheLiveCueBeforeResume() {
+        val recognition = FakeSampleRecognitionSession()
+        val viewModel = SessionViewModel(MemorySettingsStore())
+        val controller = AndroidSessionController(
+            audioInput = FakeAudioInput(),
+            viewModel = viewModel,
+            recognitionSession = recognition,
+        )
+        controller.start()
+        recognition.ready()
+        recognition.update(RecognitionUpdate("first phrase", endpoint = false))
+
+        controller.setMicrophoneEnabled(false)
+        controller.setMicrophoneEnabled(true)
+        recognition.ready()
+        recognition.update(RecognitionUpdate("second phrase", endpoint = false))
+
+        assertEquals(2, viewModel.state.value.entries.size)
+        assertEquals("first phrase", viewModel.state.value.entries.first().source)
+        assertFalse(viewModel.state.value.entries.first().current)
+        assertEquals("second phrase", viewModel.state.value.entries.last().source)
+        assertTrue(viewModel.state.value.entries.last().current)
     }
 
     private class FakeAudioInput : AudioInput {
