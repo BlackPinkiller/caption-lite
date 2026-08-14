@@ -1332,6 +1332,42 @@ class AudioAsrTests(unittest.TestCase):
         self.assertEqual([endpoint for _, endpoint in events], [False, False, True])
         np.testing.assert_array_equal(events[0][0], samples[:12])
 
+    def test_vad_gate_keeps_the_sentence_onset_when_confirmation_lags(self) -> None:
+        window_size = 4
+        onset_window = 32
+        confirm_window = 56
+        total = 64
+        samples = np.arange(total * window_size, dtype=np.float32)
+
+        class LaggingVad:
+            def __init__(self) -> None:
+                self.index = -1
+                self.detected = False
+
+            def accept_waveform(self, window) -> None:
+                self.index += 1
+                self.detected = self.index >= confirm_window
+
+            def is_speech_detected(self) -> bool:
+                return self.detected
+
+            def empty(self) -> bool:
+                return True
+
+            def pop(self) -> None:
+                pass
+
+            def reset(self) -> None:
+                self.index = -1
+                self.detected = False
+
+        gate = VadSpeechGate(LaggingVad(), window_size=window_size)
+        events = gate.process(samples)
+        emitted = np.concatenate([chunk for chunk, _ in events])
+
+        onset = onset_window * window_size
+        self.assertLessEqual(emitted[0], onset)
+
     def test_bundled_silero_vad_ignores_digital_silence(self) -> None:
         gate = VadSpeechGate(SherpaOnnxRecognitionBackend().create_vad(AppConfig()))
         events = gate.process(np.zeros(16000, dtype=np.float32))

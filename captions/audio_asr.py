@@ -16,7 +16,7 @@ from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, Recogni
 
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
-VAD_PRE_ROLL_WINDOWS = 16
+VAD_PRE_ROLL_WINDOWS = 48
 CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
 
@@ -66,6 +66,16 @@ class AutoStandbyDetector:
 
 
 class VadSpeechGate:
+    """Gates non-speech audio while preserving the sentence onset.
+
+    Only windows around confirmed speech are forwarded to the recognizer
+    (saving CPU on silence), but the pre-roll is large enough to cover the
+    VAD confirmation latency so the first words of the next sentence are
+    never evicted. The pre-roll only accumulates while speech is inactive and
+    is cleared after each detection, so it never re-feeds the previous
+    sentence's tail.
+    """
+
     def __init__(self, vad, window_size: int = VAD_WINDOW_SIZE) -> None:
         self.vad = vad
         self.window_size = window_size
