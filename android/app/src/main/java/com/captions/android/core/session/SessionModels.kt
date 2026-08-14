@@ -45,6 +45,14 @@ data class TranslationSettings(
     val contextSegments: Int = 3,
 )
 
+fun TranslationSettings.forRecognitionEngine(engine: RecognitionEngine): TranslationSettings {
+    if (engine != RecognitionEngine.Nemotron || sourceLanguage == "en") return this
+    return copy(
+        sourceLanguage = "en",
+        targetLanguage = if (targetLanguage == "en") sourceLanguage else targetLanguage,
+    )
+}
+
 data class AppearanceSettings(
     val displayMode: DisplayMode = DisplayMode.Bilingual,
     val fontChoice: FontChoice = FontChoice.System,

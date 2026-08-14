@@ -47,7 +47,9 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         recognitionSession = QueuedRecognitionSession(
             SherpaNemotronRecognitionFactory(recognitionModelManager::modelDirectory),
         ),
-        systemRecognitionSession = AndroidSystemRecognitionSession(appContext),
+        systemRecognitionSession = AndroidSystemRecognitionSession(appContext) {
+            sessionStore.state.value.translationSettings.sourceLanguage
+        },
         translationSession = translationSession,
     )
 

@@ -12,7 +12,10 @@ import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionUpdate
 import java.util.Locale
 
-class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSession {
+class AndroidSystemRecognitionSession(
+    context: Context,
+    private val language: () -> String,
+) : DirectRecognitionSession {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -52,7 +55,7 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
         if (!isActive(currentRun)) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguageTag(language()))
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(
@@ -173,3 +176,8 @@ class AndroidSystemRecognitionSession(context: Context) : DirectRecognitionSessi
         const val BUSY_RETRY_MILLIS = 500L
     }
 }
+
+internal fun recognitionLanguageTag(language: String): String =
+    Locale.forLanguageTag(language).takeIf { it.language.isNotBlank() }
+        ?.toLanguageTag()
+        ?: Locale.getDefault().toLanguageTag()

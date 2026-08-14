@@ -22,8 +22,10 @@ import com.captions.android.ports.ModelState
 @Composable
 internal fun RecognitionSettingsPage(
     engine: RecognitionEngine,
+    language: String,
     modelState: ModelState,
     onEngineChanged: (RecognitionEngine) -> Unit,
+    onLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
 ) {
     SettingsPage {
@@ -35,6 +37,14 @@ internal fun RecognitionSettingsPage(
                 ),
                 selected = engine,
                 onSelected = onEngineChanged,
+            )
+        }
+        SettingGroup(label = "语言") {
+            LanguageMenu(
+                label = "识别语言",
+                selected = if (engine == RecognitionEngine.Nemotron) "en" else language,
+                onSelected = onLanguageChanged,
+                enabled = engine == RecognitionEngine.AndroidSystem,
             )
         }
         if (engine == RecognitionEngine.Nemotron) {

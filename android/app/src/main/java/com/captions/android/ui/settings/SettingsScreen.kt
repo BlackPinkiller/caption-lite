@@ -54,6 +54,7 @@ fun SettingsScreen(
     modelState: ModelState,
     translationModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
+    onRecognitionLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
     onDownloadTranslationModel: () -> Unit,
@@ -121,8 +122,10 @@ fun SettingsScreen(
                 )
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
                     engine = state.recognitionEngine,
+                    language = state.translationSettings.sourceLanguage,
                     modelState = modelState,
                     onEngineChanged = onRecognitionEngineChanged,
+                    onLanguageChanged = onRecognitionLanguageChanged,
                     onDownloadModel = onDownloadModel,
                 )
                 SettingsDestination.Translation -> TranslationSettingsPage(
@@ -171,7 +174,11 @@ private fun SettingsHome(
         CategoryGroup(label = "核心") {
             SettingsDestinationRow(
                 title = "语音识别",
-                summary = recognitionSummary(state.recognitionEngine, modelState),
+                summary = recognitionSummary(
+                    state.recognitionEngine,
+                    state.translationSettings.sourceLanguage,
+                    modelState,
+                ),
                 onClick = { onOpen(SettingsDestination.Recognition) },
             )
             SettingsDestinationRow(
@@ -236,9 +243,13 @@ private fun SettingsDestinationRow(
     }
 }
 
-private fun recognitionSummary(engine: RecognitionEngine, state: ModelState): String = when (engine) {
-    RecognitionEngine.AndroidSystem -> "系统识别"
-    RecognitionEngine.Nemotron -> "Nemotron · ${modelSummary(state)}"
+private fun recognitionSummary(
+    engine: RecognitionEngine,
+    language: String,
+    state: ModelState,
+): String = when (engine) {
+    RecognitionEngine.AndroidSystem -> "系统识别 · ${languageName(language)}"
+    RecognitionEngine.Nemotron -> "Nemotron · 英语 · ${modelSummary(state)}"
 }
 
 private fun translationSummary(settings: TranslationSettings, state: ModelState): String {
@@ -276,20 +287,6 @@ private fun modelSummary(state: ModelState): String = when (state.phase) {
     ModelPhase.Preparing -> "准备中"
     ModelPhase.Ready -> "准备就绪"
     ModelPhase.Error -> "不可用"
-}
-
-private fun languageName(code: String): String = when (code) {
-    "en" -> "英语"
-    "zh" -> "中文"
-    "ja" -> "日语"
-    "ko" -> "韩语"
-    "de" -> "德语"
-    "fr" -> "法语"
-    "es" -> "西班牙语"
-    "it" -> "意大利语"
-    "pt" -> "葡萄牙语"
-    "ru" -> "俄语"
-    else -> code
 }
 
 private enum class SettingsDestination(val title: String) {

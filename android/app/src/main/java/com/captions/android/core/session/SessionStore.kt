@@ -10,6 +10,9 @@ class SessionStore(
     private val settingsStore: SettingsStore,
 ) : SessionStateController {
     private val timeline = SessionTimeline()
+    private val initialRecognitionEngine = settingsStore.loadRecognitionEngine()
+    private val initialTranslationSettings = settingsStore.loadTranslation()
+        .forRecognitionEngine(initialRecognitionEngine)
     private val mutableState = MutableStateFlow(
         settingsStore.loadAppearance().let {
             SessionUiState(
@@ -20,8 +23,8 @@ class SessionStore(
                 overlayEnabled = it.overlayEnabled,
                 overlayBackgroundEnabled = it.overlayBackgroundEnabled,
                 overlayPosition = it.overlayPosition,
-                recognitionEngine = settingsStore.loadRecognitionEngine(),
-                translationSettings = settingsStore.loadTranslation(),
+                recognitionEngine = initialRecognitionEngine,
+                translationSettings = initialTranslationSettings,
             )
         },
     )
@@ -92,13 +95,23 @@ class SessionStore(
     }
 
     override fun setRecognitionEngine(engine: RecognitionEngine) {
-        mutableState.value = mutableState.value.copy(recognitionEngine = engine, message = "")
+        val translationSettings = mutableState.value.translationSettings.forRecognitionEngine(engine)
+        mutableState.value = mutableState.value.copy(
+            recognitionEngine = engine,
+            translationSettings = translationSettings,
+            message = "",
+        )
         settingsStore.saveRecognitionEngine(engine)
+        settingsStore.saveTranslation(translationSettings)
     }
 
     override fun setTranslationSettings(settings: TranslationSettings) {
-        mutableState.value = mutableState.value.copy(translationSettings = settings, message = "")
-        settingsStore.saveTranslation(settings)
+        val normalized = settings.forRecognitionEngine(mutableState.value.recognitionEngine)
+        mutableState.value = mutableState.value.copy(
+            translationSettings = normalized,
+            message = "",
+        )
+        settingsStore.saveTranslation(normalized)
     }
 
     override fun showMessage(message: String) {

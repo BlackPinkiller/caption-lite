@@ -126,6 +126,13 @@ class MainActivity : ComponentActivity() {
                                     CaptionSessionService.stop(this@MainActivity)
                                 }
                                 sessionViewModel.setRecognitionEngine(it)
+                                runtime.applyTranslationSettings()
+                            },
+                            onRecognitionLanguageChanged = { language ->
+                                sessionViewModel.setTranslationSettings(
+                                    state.translationSettings.copy(sourceLanguage = language),
+                                )
+                                runtime.applyTranslationSettings()
                             },
                             onDownloadModel = modelManager::download,
                             onTranslationSettingsChanged = {

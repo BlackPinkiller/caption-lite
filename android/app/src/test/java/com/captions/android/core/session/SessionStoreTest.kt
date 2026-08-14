@@ -27,7 +27,47 @@ class SessionStoreTest {
         assertEquals(store.state.value.overlayPosition, settings.appearance.overlayPosition)
     }
 
-    private class MemorySettingsStore : SettingsStore {
+    @Test
+    fun `nemotron keeps recognition and translation source in english`() {
+        val settings = MemorySettingsStore(
+            recognitionEngine = RecognitionEngine.AndroidSystem,
+            translation = TranslationSettings(sourceLanguage = "ja", targetLanguage = "en"),
+        )
+        val store = SessionStore(settings)
+
+        store.setRecognitionEngine(RecognitionEngine.Nemotron)
+
+        assertEquals("en", store.state.value.translationSettings.sourceLanguage)
+        assertEquals("ja", store.state.value.translationSettings.targetLanguage)
+        assertEquals(store.state.value.translationSettings, settings.translation)
+    }
+
+    @Test
+    fun `system recognition preserves the selected source language`() {
+        val settings = MemorySettingsStore(
+            recognitionEngine = RecognitionEngine.AndroidSystem,
+            translation = TranslationSettings(sourceLanguage = "ja", targetLanguage = "zh"),
+        )
+
+        assertEquals("ja", SessionStore(settings).state.value.translationSettings.sourceLanguage)
+    }
+
+    @Test
+    fun `nemotron rejects an incompatible source language update`() {
+        val store = SessionStore(MemorySettingsStore())
+
+        store.setTranslationSettings(
+            TranslationSettings(sourceLanguage = "ja", targetLanguage = "zh"),
+        )
+
+        assertEquals("en", store.state.value.translationSettings.sourceLanguage)
+        assertEquals("zh", store.state.value.translationSettings.targetLanguage)
+    }
+
+    private class MemorySettingsStore(
+        private var recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
+        var translation: TranslationSettings = TranslationSettings(),
+    ) : SettingsStore {
         var appearance = AppearanceSettings()
 
         override fun loadAppearance(): AppearanceSettings = appearance
@@ -36,12 +76,16 @@ class SessionStoreTest {
             appearance = settings
         }
 
-        override fun loadRecognitionEngine(): RecognitionEngine = RecognitionEngine.Nemotron
+        override fun loadRecognitionEngine(): RecognitionEngine = recognitionEngine
 
-        override fun saveRecognitionEngine(engine: RecognitionEngine) = Unit
+        override fun saveRecognitionEngine(engine: RecognitionEngine) {
+            recognitionEngine = engine
+        }
 
-        override fun loadTranslation(): TranslationSettings = TranslationSettings()
+        override fun loadTranslation(): TranslationSettings = translation
 
-        override fun saveTranslation(settings: TranslationSettings) = Unit
+        override fun saveTranslation(settings: TranslationSettings) {
+            translation = settings
+        }
     }
 }

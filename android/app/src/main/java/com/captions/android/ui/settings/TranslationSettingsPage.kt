@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -15,7 +13,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -75,49 +72,33 @@ internal fun TranslationSettingsPage(
                     onSelected = { onChanged(settings.copy(engine = it)) },
                 )
             }
-            SettingGroup(label = "语言") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    LanguageMenu(
-                        label = "原文",
-                        selected = settings.sourceLanguage,
-                        onSelected = { source ->
-                            onChanged(
-                                if (source == settings.targetLanguage) {
-                                    settings.copy(
-                                        sourceLanguage = source,
-                                        targetLanguage = settings.sourceLanguage,
-                                    )
-                                } else {
-                                    settings.copy(sourceLanguage = source)
-                                },
-                            )
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text("→", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LanguageMenu(
-                        label = "译文",
-                        selected = settings.targetLanguage,
-                        onSelected = { target ->
-                            onChanged(
-                                if (target == settings.sourceLanguage) {
-                                    settings.copy(
-                                        sourceLanguage = settings.targetLanguage,
-                                        targetLanguage = target,
-                                    )
-                                } else {
-                                    settings.copy(targetLanguage = target)
-                                },
-                            )
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+        }
+        SettingGroup(label = "语言") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LanguageMenu(
+                    label = "原文",
+                    selected = settings.sourceLanguage,
+                    onSelected = {},
+                    modifier = Modifier.weight(1f),
+                    enabled = false,
+                )
+                Text("→", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LanguageMenu(
+                    label = "译文",
+                    selected = settings.targetLanguage,
+                    onSelected = { target ->
+                        onChanged(settings.copy(targetLanguage = target))
+                    },
+                    modifier = Modifier.weight(1f),
+                    choices = LANGUAGES.filterNot { it.first == settings.sourceLanguage },
+                )
             }
+        }
+        if (settings.enabled) {
             when (settings.engine) {
                 TranslationEngine.GoogleOnDevice -> TranslationModelStatus(
                     modelState,
@@ -218,36 +199,6 @@ private fun LlmSettings(
 }
 
 @Composable
-private fun LanguageMenu(
-    label: String,
-    selected: String,
-    onSelected: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(modifier = modifier) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-        TextButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(LANGUAGES.firstOrNull { it.first == selected }?.second ?: selected)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            LANGUAGES.forEach { (code, name) ->
-                DropdownMenuItem(
-                    text = { Text(name) },
-                    onClick = {
-                        expanded = false
-                        onSelected(code)
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun TranslationModelStatus(state: ModelState, onDownload: () -> Unit) {
     SettingGroup(label = "本地模型") {
         Row(
@@ -279,16 +230,3 @@ private fun engineName(engine: TranslationEngine): String = when (engine) {
     TranslationEngine.DeepL -> "DeepL"
     TranslationEngine.OpenAICompatible -> "LLM"
 }
-
-private val LANGUAGES = listOf(
-    "en" to "英语",
-    "zh" to "中文",
-    "ja" to "日语",
-    "ko" to "韩语",
-    "de" to "德语",
-    "fr" to "法语",
-    "es" to "西班牙语",
-    "it" to "意大利语",
-    "pt" to "葡萄牙语",
-    "ru" to "俄语",
-)
