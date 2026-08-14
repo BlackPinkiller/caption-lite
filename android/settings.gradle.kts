@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "CaptionsAndroid"
 include(":app")
+include(":llama")

@@ -26,7 +26,13 @@ class AndroidTranslationModelManager(context: Context) : TranslationModelManager
     private val mutableState = MutableStateFlow(ModelState(ModelPhase.Preparing))
     private val capabilityListener = Consumer<TranslationCapability> { capability ->
         val current = settings
-        if (capability.matches(current)) updateState(capability)
+        val matches = capability.matches(current)
+        val applies = matches &&
+            (
+                capability.exactVariant(current) ||
+                    capability.state == TranslationCapability.STATE_ON_DEVICE
+                )
+        if (applies) updateState(capability)
     }
     @Volatile
     private var settings = TranslationSettings()
@@ -56,9 +62,13 @@ class AndroidTranslationModelManager(context: Context) : TranslationModelManager
                 currentManager.getOnDeviceTranslationCapabilities(
                     TranslationSpec.DATA_FORMAT_TEXT,
                     TranslationSpec.DATA_FORMAT_TEXT,
-                ).firstOrNull { it.matches(settings) }
-            }.onSuccess { capability ->
+                )
+            }.onSuccess { capabilities ->
                 if (currentId != requestId.get()) return@onSuccess
+                val matches = capabilities.filter { it.matches(settings) }
+                val capability = matches.firstOrNull { it.exactVariant(settings) }
+                    ?: matches.firstOrNull { it.state == TranslationCapability.STATE_ON_DEVICE }
+                    ?: matches.firstOrNull()
                 if (capability == null) {
                     mutableState.value = ModelState(
                         ModelPhase.Error,
@@ -117,6 +127,10 @@ class AndroidTranslationModelManager(context: Context) : TranslationModelManager
 internal fun TranslationCapability.matches(settings: TranslationSettings): Boolean =
     sameLanguage(sourceSpec.locale.toLanguageTag(), settings.sourceLanguage) &&
         sameLanguage(targetSpec.locale.toLanguageTag(), settings.targetLanguage)
+
+internal fun TranslationCapability.exactVariant(settings: TranslationSettings): Boolean =
+    sourceSpec.locale.toLanguageTag().equals(settings.sourceLanguage, ignoreCase = true) &&
+        targetSpec.locale.toLanguageTag().equals(settings.targetLanguage, ignoreCase = true)
 
 internal fun TranslationSettings.samePair(other: TranslationSettings): Boolean =
     sameLanguage(sourceLanguage, other.sourceLanguage) &&

@@ -16,6 +16,7 @@ class TranslationRouterTest {
             google2 = named("google"),
             deepL = named("deepl"),
             openAICompatible = named("llm"),
+            hyMt2 = named("hymt"),
         )
 
         TranslationEngine.entries.forEach { engine ->
@@ -24,6 +25,7 @@ class TranslationRouterTest {
                 TranslationEngine.Google2 -> "google"
                 TranslationEngine.DeepL -> "deepl"
                 TranslationEngine.OpenAICompatible -> "llm"
+                TranslationEngine.HyMt2 -> "hymt"
             }
             assertEquals(
                 expected,
@@ -34,12 +36,13 @@ class TranslationRouterTest {
 
     @Test
     fun closeReleasesEveryBackend() {
-        val translators = List(4) { TrackingTranslator() }
+        val translators = List(5) { TrackingTranslator() }
         val router = TranslationRouter(
             local = translators[0],
             google2 = translators[1],
             deepL = translators[2],
             openAICompatible = translators[3],
+            hyMt2 = translators[4],
         )
 
         router.close()

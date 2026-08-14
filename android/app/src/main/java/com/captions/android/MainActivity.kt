@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private val modelManager get() = runtime.recognitionModelManager
     private val systemModelManager get() = runtime.systemRecognitionModelManager
     private val translationModelManager get() = runtime.translationModelManager
+    private val hyMt2ModelManager get() = runtime.hyMt2ModelManager
     private val screenAwakeController by lazy { AndroidScreenAwakeController(window) }
 
     private val microphonePermission = registerForActivityResult(
@@ -96,6 +97,7 @@ class MainActivity : ComponentActivity() {
             val modelState by modelManager.state.collectAsStateWithLifecycle()
             val systemModelState by systemModelManager.state.collectAsStateWithLifecycle()
             val translationModelState by translationModelManager.state.collectAsStateWithLifecycle()
+            val hyMt2ModelState by hyMt2ModelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             val sessionActive = state.running || state.starting
             DisposableEffect(sessionActive) {
@@ -125,6 +127,7 @@ class MainActivity : ComponentActivity() {
                             modelState = modelState,
                             systemModelState = systemModelState,
                             translationModelState = translationModelState,
+                            hyMt2ModelState = hyMt2ModelState,
                             onRecognitionEngineChanged = {
                                 if (state.running || state.starting) {
                                     sessionController.pause()
@@ -150,6 +153,7 @@ class MainActivity : ComponentActivity() {
                                 runtime.applyTranslationSettings()
                             },
                             onDownloadTranslationModel = translationModelManager::download,
+                            onDownloadHyMt2Model = hyMt2ModelManager::download,
                             onDisplayModeChanged = sessionViewModel::setDisplayMode,
                             onFontChoiceChanged = sessionViewModel::setFontChoice,
                             onSourceSizeChanged = sessionViewModel::setSourceSize,
@@ -244,6 +248,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         translationModelManager.configure(sessionViewModel.state.value.translationSettings)
+        hyMt2ModelManager.configure(sessionViewModel.state.value.translationSettings)
     }
 
     override fun onStop() {

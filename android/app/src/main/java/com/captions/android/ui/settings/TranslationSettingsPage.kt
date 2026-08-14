@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -30,8 +32,10 @@ import com.captions.android.ports.ModelState
 internal fun TranslationSettingsPage(
     settings: TranslationSettings,
     modelState: ModelState,
+    hyMt2ModelState: ModelState,
     onChanged: (TranslationSettings) -> Unit,
     onDownloadModel: () -> Unit,
+    onDownloadHyMt2Model: () -> Unit,
 ) {
     var advancedOpen by rememberSaveable { mutableStateOf(false) }
     SettingsPage {
@@ -59,6 +63,7 @@ internal fun TranslationSettingsPage(
                     choices = listOf(
                         TranslationEngine.GoogleOnDevice to "Google 本地",
                         TranslationEngine.Google2 to "Google",
+                        TranslationEngine.HyMt2 to "HyMT2",
                     ),
                     selected = settings.engine,
                     onSelected = { onChanged(settings.copy(engine = it)) },
@@ -103,6 +108,11 @@ internal fun TranslationSettingsPage(
                 TranslationEngine.GoogleOnDevice -> TranslationModelStatus(
                     modelState,
                     onDownloadModel,
+                )
+                TranslationEngine.HyMt2 -> TranslationModelStatus(
+                    hyMt2ModelState,
+                    onDownloadHyMt2Model,
+                    missingLabel = "HyMT2 · 约 440 MB",
                 )
                 TranslationEngine.Google2 -> Unit
                 TranslationEngine.DeepL -> DeepLSettings(settings, onChanged)
@@ -199,26 +209,45 @@ private fun LlmSettings(
 }
 
 @Composable
-private fun TranslationModelStatus(state: ModelState, onDownload: () -> Unit) {
+private fun TranslationModelStatus(
+    state: ModelState,
+    onDownload: () -> Unit,
+    missingLabel: String = "每种语言约 30 MB",
+) {
     SettingGroup(label = "本地模型") {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Text(
-                text = when (state.phase) {
-                    ModelPhase.Missing -> "每种语言约 30 MB"
-                    ModelPhase.Downloading -> "正在下载"
-                    ModelPhase.Preparing -> "正在检查"
-                    ModelPhase.Ready -> "准备就绪"
-                    ModelPhase.Error -> state.detail.ifEmpty { "模型不可用" }
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 14.sp,
-            )
-            Spacer(Modifier.weight(1f))
-            if (state.phase == ModelPhase.Missing || state.phase == ModelPhase.Error) {
-                TextButton(onClick = onDownload) { Text("下载") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = when (state.phase) {
+                        ModelPhase.Missing -> missingLabel
+                        ModelPhase.Downloading -> "下载中 ${state.progressPercent}%"
+                        ModelPhase.Preparing -> "正在检查"
+                        ModelPhase.Ready -> "准备就绪"
+                        ModelPhase.Error -> state.detail.ifEmpty { "模型不可用" }
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.weight(1f))
+                if (state.phase == ModelPhase.Missing || state.phase == ModelPhase.Error) {
+                    TextButton(onClick = onDownload) { Text("下载") }
+                }
+            }
+            if (state.phase == ModelPhase.Downloading) {
+                LinearProgressIndicator(
+                    progress = { state.progressPercent / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (state.phase == ModelPhase.Preparing) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -229,4 +258,5 @@ private fun engineName(engine: TranslationEngine): String = when (engine) {
     TranslationEngine.Google2 -> "Google"
     TranslationEngine.DeepL -> "DeepL"
     TranslationEngine.OpenAICompatible -> "LLM"
+    TranslationEngine.HyMt2 -> "HyMT2"
 }

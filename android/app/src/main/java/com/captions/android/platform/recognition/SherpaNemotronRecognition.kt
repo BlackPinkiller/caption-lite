@@ -1,5 +1,8 @@
 package com.captions.android.platform.recognition
 
+import android.content.res.AssetManager
+import com.captions.android.core.recognition.VadGate
+import com.captions.android.core.recognition.VadGatedStreamingRecognizer
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.StreamingRecognizer
 import com.captions.android.ports.StreamingRecognizerFactory
@@ -15,6 +18,7 @@ import java.io.File
 
 class SherpaNemotronRecognitionFactory(
     private val modelDirectory: () -> File,
+    private val assetManager: AssetManager,
 ) : StreamingRecognizerFactory {
     override fun create(): StreamingRecognizer {
         val directory = modelDirectory()
@@ -46,7 +50,11 @@ class SherpaNemotronRecognitionFactory(
             enableEndpoint = true,
             decodingMethod = "greedy_search",
         )
-        return SherpaNemotronRecognition(OnlineRecognizer(assetManager = null, config = config))
+        val recognizer = SherpaNemotronRecognition(
+            OnlineRecognizer(assetManager = null, config = config),
+        )
+        val gate = VadGate(SherpaSpeechActivityVad(assetManager))
+        return VadGatedStreamingRecognizer(recognizer, gate)
     }
 
     private companion object {

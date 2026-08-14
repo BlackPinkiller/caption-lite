@@ -39,6 +39,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -54,6 +58,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation(files("libs/sherpa-onnx-1.13.5.aar"))
+    implementation(project(":llama"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

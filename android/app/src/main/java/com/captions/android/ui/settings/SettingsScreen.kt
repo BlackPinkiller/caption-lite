@@ -54,12 +54,14 @@ fun SettingsScreen(
     modelState: ModelState,
     systemModelState: ModelState,
     translationModelState: ModelState,
+    hyMt2ModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
     onDownloadTranslationModel: () -> Unit,
+    onDownloadHyMt2Model: () -> Unit,
     onDisplayModeChanged: (DisplayMode) -> Unit,
     onFontChoiceChanged: (FontChoice) -> Unit,
     onSourceSizeChanged: (Int) -> Unit,
@@ -121,6 +123,7 @@ fun SettingsScreen(
                     modelState = modelState,
                     systemModelState = systemModelState,
                     translationModelState = translationModelState,
+                    hyMt2ModelState = hyMt2ModelState,
                     onOpen = { destination = it },
                 )
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
@@ -136,8 +139,10 @@ fun SettingsScreen(
                 SettingsDestination.Translation -> TranslationSettingsPage(
                     settings = state.translationSettings,
                     modelState = translationModelState,
+                    hyMt2ModelState = hyMt2ModelState,
                     onChanged = onTranslationSettingsChanged,
                     onDownloadModel = onDownloadTranslationModel,
+                    onDownloadHyMt2Model = onDownloadHyMt2Model,
                 )
                 SettingsDestination.Captions -> CaptionSettingsPage(
                     displayMode = state.displayMode,
@@ -168,6 +173,7 @@ private fun SettingsHome(
     modelState: ModelState,
     systemModelState: ModelState,
     translationModelState: ModelState,
+    hyMt2ModelState: ModelState,
     onOpen: (SettingsDestination) -> Unit,
 ) {
     Column(
@@ -193,7 +199,14 @@ private fun SettingsHome(
             )
             SettingsDestinationRow(
                 title = "翻译",
-                summary = translationSummary(state.translationSettings, translationModelState),
+                summary = translationSummary(
+                    state.translationSettings,
+                    if (state.translationSettings.engine == TranslationEngine.HyMt2) {
+                        hyMt2ModelState
+                    } else {
+                        translationModelState
+                    },
+                ),
                 onClick = { onOpen(SettingsDestination.Translation) },
             )
         }
@@ -270,6 +283,7 @@ private fun translationSummary(settings: TranslationSettings, state: ModelState)
         TranslationEngine.Google2 -> "Google"
         TranslationEngine.DeepL -> "DeepL"
         TranslationEngine.OpenAICompatible -> "LLM"
+        TranslationEngine.HyMt2 -> "HyMT2 · ${modelSummary(state)}"
     }
     return "$engine · ${languageName(settings.sourceLanguage)} → ${languageName(settings.targetLanguage)}"
 }
