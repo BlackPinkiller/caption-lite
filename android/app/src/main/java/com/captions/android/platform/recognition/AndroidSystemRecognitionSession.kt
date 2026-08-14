@@ -80,7 +80,7 @@ class AndroidSystemRecognitionSession(
         }
     }
 
-    private fun recreateAndRestart(currentRun: Long) {
+    private fun recreateAndRestart(currentRun: Long, delayMillis: Long) {
         if (!isActive(currentRun)) return
         restartAction?.let(handler::removeCallbacks)
         restartAction = Runnable {
@@ -89,7 +89,7 @@ class AndroidSystemRecognitionSession(
             createRecognizer(currentRun)
             listen(currentRun)
         }.also {
-            handler.postDelayed(it, CLIENT_RECOVERY_MILLIS)
+            handler.postDelayed(it, delayMillis)
         }
     }
 
@@ -108,20 +108,27 @@ class AndroidSystemRecognitionSession(
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
                 -> {
-                    accumulator.commit()?.let {
-                        onUpdate(RecognitionUpdate(it, endpoint = false))
-                        scheduleSemanticEndpoint(currentRun)
-                    }
+                    preserveCurrentText(currentRun)
                     restart(currentRun, NO_SPEECH_RETRY_MILLIS)
                 }
 
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> restart(currentRun, BUSY_RETRY_MILLIS)
                 SpeechRecognizer.ERROR_CLIENT -> {
-                    accumulator.commit()?.let {
-                        onUpdate(RecognitionUpdate(it, endpoint = false))
-                        scheduleSemanticEndpoint(currentRun)
-                    }
-                    recreateAndRestart(currentRun)
+                    preserveCurrentText(currentRun)
+                    recreateAndRestart(currentRun, CLIENT_RECOVERY_MILLIS)
+                }
+                SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
+                SpeechRecognizer.ERROR_NETWORK,
+                SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                SpeechRecognizer.ERROR_SERVER,
+                -> {
+                    preserveCurrentText(currentRun)
+                    recreateAndRestart(currentRun, SERVICE_RECOVERY_MILLIS)
+                }
+
+                SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> {
+                    preserveCurrentText(currentRun)
+                    recreateAndRestart(currentRun, RATE_LIMIT_RECOVERY_MILLIS)
                 }
                 else -> {
                     active = false
@@ -165,6 +172,13 @@ class AndroidSystemRecognitionSession(
 
     private fun finalizeSystemSegment(currentRun: Long, text: String) {
         accumulator.commit(text)?.let {
+            onUpdate(RecognitionUpdate(it, endpoint = false))
+            scheduleSemanticEndpoint(currentRun)
+        }
+    }
+
+    private fun preserveCurrentText(currentRun: Long) {
+        accumulator.commit()?.let {
             onUpdate(RecognitionUpdate(it, endpoint = false))
             scheduleSemanticEndpoint(currentRun)
         }
@@ -244,6 +258,8 @@ class AndroidSystemRecognitionSession(
         const val NO_SPEECH_RETRY_MILLIS = 150L
         const val BUSY_RETRY_MILLIS = 500L
         const val CLIENT_RECOVERY_MILLIS = 500L
+        const val SERVICE_RECOVERY_MILLIS = 1_000L
+        const val RATE_LIMIT_RECOVERY_MILLIS = 2_000L
         const val SEMANTIC_ENDPOINT_MILLIS = 2_400L
     }
 }
