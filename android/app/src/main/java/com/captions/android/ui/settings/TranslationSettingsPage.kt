@@ -257,9 +257,8 @@ private fun TranslationModelStatus(state: ModelState, onDownload: () -> Unit) {
             Text(
                 text = when (state.phase) {
                     ModelPhase.Missing -> "每种语言约 30 MB"
-                    ModelPhase.Downloading,
-                    ModelPhase.Preparing,
-                    -> "正在下载"
+                    ModelPhase.Downloading -> "正在下载"
+                    ModelPhase.Preparing -> "正在检查"
                     ModelPhase.Ready -> "准备就绪"
                     ModelPhase.Error -> state.detail.ifEmpty { "模型不可用" }
                 },

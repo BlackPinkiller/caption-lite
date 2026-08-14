@@ -26,7 +26,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
 
     val sessionStore = SessionStore(settingsStore)
     val recognitionModelManager = AndroidNemotronModelManager(appContext)
-    val translationModelManager = GoogleTranslationModelManager(appContext)
+    val translationModelManager = GoogleTranslationModelManager()
     private val mutableAppVisible = MutableStateFlow(false)
     val appVisible = mutableAppVisible.asStateFlow()
 
