@@ -30,15 +30,18 @@ class CaptionSessionService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var overlay: AndroidCaptionOverlay
     private var observedActiveSession = false
+    private var displayedNotificationStatus = ""
 
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         overlay = AndroidCaptionOverlay(this)
         createNotificationChannel()
+        val initialState = runtime.sessionStore.state.value
+        displayedNotificationStatus = notificationStatus(initialState)
         startForeground(
             NOTIFICATION_ID,
-            notification(runtime.sessionStore.state.value),
+            notification(displayedNotificationStatus),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
         )
         scope.launch {
@@ -51,7 +54,11 @@ class CaptionSessionService : Service() {
                 val active = state.starting || state.running
                 if (active) {
                     observedActiveSession = true
-                    notificationManager.notify(NOTIFICATION_ID, notification(state))
+                    val status = notificationStatus(state)
+                    if (status != displayedNotificationStatus) {
+                        displayedNotificationStatus = status
+                        notificationManager.notify(NOTIFICATION_ID, notification(status))
+                    }
                 } else if (observedActiveSession) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -92,7 +99,7 @@ class CaptionSessionService : Service() {
         )
     }
 
-    private fun notification(state: SessionUiState): Notification {
+    private fun notification(status: String): Notification {
         val openApp = PendingIntent.getActivity(
             this,
             0,
@@ -107,12 +114,6 @@ class CaptionSessionService : Service() {
             Intent(this, CaptionSessionService::class.java).setAction(ACTION_PAUSE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val status = when {
-            state.starting -> "正在准备"
-            !state.microphoneEnabled -> "会话进行中 · 麦克风关闭"
-            state.translationSettings.enabled -> "正在识别与翻译"
-            else -> "正在识别"
-        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_mic)
             .setContentTitle("实时字幕")
@@ -123,6 +124,13 @@ class CaptionSessionService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(R.drawable.ic_pause, "暂停", pause)
             .build()
+    }
+
+    private fun notificationStatus(state: SessionUiState): String = when {
+        state.starting -> "正在准备"
+        !state.microphoneEnabled -> "会话进行中 · 麦克风关闭"
+        state.translationSettings.enabled -> "正在识别与翻译"
+        else -> "正在识别"
     }
 
     companion object {
