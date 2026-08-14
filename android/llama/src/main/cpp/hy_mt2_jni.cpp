@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,25 @@ static constexpr int   DEFAULT_N_CTX       = 1024;
 
 static llama_model   * g_model   = nullptr;
 static llama_context * g_context = nullptr;
+static common_chat_templates_ptr g_chat_templates;
+// Tokens of the last processed prompt, kept so the next generate only decodes
+// the tokens that were not already in the KV cache (the template + subtitle
+// context prefix is stable across translations).
+static std::vector<llama_token> g_last_prompt;
+
+static int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static size_t common_prefix(const std::vector<llama_token> & a, const std::vector<llama_token> & b) {
+    size_t n = std::min(a.size(), b.size());
+    size_t i = 0;
+    while (i < n && a[i] == b[i]) {
+        i++;
+    }
+    return i;
+}
 
 static void llama_log_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
     if (text == nullptr) {
@@ -73,6 +93,9 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeLoad(
         return JNI_FALSE;
     }
 
+    g_chat_templates = common_chat_templates_init(g_model, "");
+    g_last_prompt.clear();
+
     LOGI("model loaded, n_ctx = %d, n_threads = %d", cparams.n_ctx, cparams.n_threads);
     return JNI_TRUE;
 }
@@ -87,25 +110,21 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeGenerate(
         return env->NewStringUTF("");
     }
 
-    // Each translation starts from a fresh sequence. Without clearing the KV
-    // cache, a new (shorter) prompt would decode over stale positions left by
-    // the previous generation and produce garbage output.
-    llama_memory_clear(llama_get_memory(g_context), true);
+    const int64_t t0 = now_ms();
 
     const char * prompt_c = env->GetStringUTFChars(prompt, nullptr);
     std::string prompt_str(prompt_c);
     env->ReleaseStringUTFChars(prompt, prompt_c);
 
     // Apply the model's chat template as a single user message.
-    auto chat_templates = common_chat_templates_init(g_model, "");
     std::string formatted = prompt_str;
-    if (common_chat_templates_was_explicit(chat_templates.get())) {
+    if (g_chat_templates != nullptr && common_chat_templates_was_explicit(g_chat_templates.get())) {
         common_chat_templates_inputs inputs;
         common_chat_msg msg;
         msg.role = "user";
         msg.content = prompt_str;
         inputs.messages.push_back(msg);
-        formatted = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+        formatted = common_chat_templates_apply(g_chat_templates.get(), inputs).prompt;
         if (formatted.empty()) {
             formatted = prompt_str;
         }
@@ -113,11 +132,37 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeGenerate(
 
     auto tokens = common_tokenize(g_context, formatted, true, true);
 
-    llama_batch batch = llama_batch_get_one(tokens.data(), static_cast<int32_t>(tokens.size()));
+    // Reuse the KV cache across calls: the template + context prefix is stable,
+    // so only the new suffix tokens need a decode. A metadata-only clear resets
+    // the sequence when the prompt has no common prefix with the previous one.
+    llama_memory_t mem = llama_get_memory(g_context);
+    size_t start = 0;
+    if (!g_last_prompt.empty()) {
+        size_t shared = common_prefix(g_last_prompt, tokens);
+        if (shared >= tokens.size()) {
+            shared = tokens.size() - 1; // always decode at least the last token for fresh logits
+        }
+        if (shared > 0) {
+            if (llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(shared), -1)) {
+                start = shared;
+            } else {
+                llama_memory_clear(mem, false);
+            }
+        } else {
+            llama_memory_clear(mem, false);
+        }
+    } else {
+        llama_memory_clear(mem, false);
+    }
+
+    llama_batch batch = llama_batch_get_one(
+        tokens.data() + start, static_cast<int32_t>(tokens.size() - start));
     if (llama_decode(g_context, batch) != 0) {
         LOGE("llama_decode failed for prompt");
         return env->NewStringUTF("");
     }
+    g_last_prompt = tokens;
+    const int64_t t1 = now_ms();
 
     common_params_sampling sparams;
     sparams.temp           = HYMT2_TEMP;
@@ -126,17 +171,21 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeGenerate(
     sparams.penalty_repeat = HYMT2_REP_PENALTY;
     auto * sampler = common_sampler_init(g_model, sparams);
 
-    std::string result;
-    const llama_token eos = llama_vocab_eos(llama_model_get_vocab(g_model));
+    const llama_vocab * vocab = llama_model_get_vocab(g_model);
     const int limit = max_tokens > 0 ? max_tokens : 256;
 
+    std::string result;
+    int generated = 0;
+    bool stopped = false;
     for (int i = 0; i < limit; i++) {
         const llama_token id = common_sampler_sample(sampler, g_context, -1);
         common_sampler_accept(sampler, id, true);
-        if (id == eos) {
+        if (llama_vocab_is_eog(vocab, id)) {
+            stopped = true;
             break;
         }
         result += common_token_to_piece(g_context, id);
+        generated++;
 
         llama_token token = id;
         llama_batch next = llama_batch_get_one(&token, 1);
@@ -146,6 +195,12 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeGenerate(
         }
     }
     common_sampler_free(sampler);
+
+    const int64_t t2 = now_ms();
+    LOGI("generate: prompt_tokens=%zu decoded=%zu decode_ms=%lld gen_tokens=%d eog=%d "
+         "gen_ms=%lld total_ms=%lld first_char=%.40s",
+         tokens.size(), tokens.size() - start, (long long) (t1 - t0), generated, (int) stopped,
+         (long long) (t2 - t1), (long long) (t2 - t0), result.c_str());
 
     return env->NewStringUTF(result.c_str());
 }
@@ -162,5 +217,7 @@ Java_com_captions_android_hymt_HyMt2Engine_nativeUnload(
         llama_free_model(g_model);
         g_model = nullptr;
     }
+    g_chat_templates.reset();
+    g_last_prompt.clear();
     LOGI("model unloaded");
 }
