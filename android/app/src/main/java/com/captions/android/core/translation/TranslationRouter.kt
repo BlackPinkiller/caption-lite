@@ -17,4 +17,11 @@ class TranslationRouter(
         TranslationEngine.DeepL -> deepL.translate(input, settings)
         TranslationEngine.OpenAICompatible -> openAICompatible.translate(input, settings)
     }
+
+    override fun close() {
+        local.close()
+        google2.close()
+        deepL.close()
+        openAICompatible.close()
+    }
 }

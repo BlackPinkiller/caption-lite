@@ -1,6 +1,8 @@
 package com.captions.android.core.translation
 
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.ports.TextTranslator
+import com.captions.android.ports.TranslationInput
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
@@ -96,5 +98,25 @@ class RealtimeTranslationSessionTest {
 
         assertEquals(false, accepted)
         session.close()
+    }
+
+    @Test
+    fun closeReleasesTranslatorResources() {
+        var closed = false
+        val translator = object : TextTranslator {
+            override fun translate(
+                input: TranslationInput,
+                settings: TranslationSettings,
+            ): String = input.text
+
+            override fun close() {
+                closed = true
+            }
+        }
+        val session = RealtimeTranslationSession(translator)
+
+        session.close()
+
+        assertTrue(closed)
     }
 }

@@ -8,8 +8,10 @@ data class TranslationInput(
     val context: List<String> = emptyList(),
 )
 
-fun interface TextTranslator {
+fun interface TextTranslator : AutoCloseable {
     fun translate(input: TranslationInput, settings: TranslationSettings): String
+
+    override fun close() = Unit
 }
 
 interface TranslationSession : AutoCloseable {

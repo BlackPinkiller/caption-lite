@@ -172,6 +172,7 @@ class RealtimeTranslationSession(
         scheduler.shutdownNow()
         previewExecutor.shutdownNow()
         finalExecutor.shutdownNow()
+        translator.close()
     }
 
     private fun resetPreviewLocked(cueId: Long) {

@@ -84,7 +84,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        translationModelManager.configure(sessionViewModel.state.value.translationSettings)
         systemModelManager.configure(
             sessionViewModel.state.value.translationSettings.sourceLanguage,
         )
@@ -240,6 +239,11 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         runtime.setAppVisible(true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        translationModelManager.configure(sessionViewModel.state.value.translationSettings)
     }
 
     override fun onStop() {

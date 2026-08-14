@@ -14,8 +14,8 @@ import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.platform.settings.AndroidSettingsStore
 import com.captions.android.platform.translation.DeepLTranslator
 import com.captions.android.platform.translation.Google2Translator
-import com.captions.android.platform.translation.GoogleOnDeviceTranslator
-import com.captions.android.platform.translation.GoogleTranslationModelManager
+import com.captions.android.platform.translation.AndroidOnDeviceTranslator
+import com.captions.android.platform.translation.AndroidTranslationModelManager
 import com.captions.android.platform.translation.OpenAICompatibleTranslator
 import com.captions.android.platform.translation.UrlConnectionHttpClient
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,14 +28,14 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     val sessionStore = SessionStore(settingsStore)
     val recognitionModelManager = AndroidNemotronModelManager(appContext)
     val systemRecognitionModelManager = AndroidSpeechModelManager(appContext)
-    val translationModelManager = GoogleTranslationModelManager()
+    val translationModelManager = AndroidTranslationModelManager(appContext)
     private val mutableAppVisible = MutableStateFlow(false)
     val appVisible = mutableAppVisible.asStateFlow()
 
     private val translationSession = RealtimeTranslationSession(
         UrlConnectionHttpClient().let { httpClient ->
             TranslationRouter(
-                local = GoogleOnDeviceTranslator(translationModelManager),
+                local = AndroidOnDeviceTranslator(appContext, translationModelManager),
                 google2 = Google2Translator(httpClient),
                 deepL = DeepLTranslator(httpClient),
                 openAICompatible = OpenAICompatibleTranslator(httpClient),

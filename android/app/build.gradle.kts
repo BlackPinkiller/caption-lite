@@ -53,7 +53,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
-    implementation("com.google.mlkit:translate:17.0.3")
     implementation(files("libs/sherpa-onnx-1.13.5.aar"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")

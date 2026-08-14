@@ -5,6 +5,7 @@ import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.TextTranslator
 import com.captions.android.ports.TranslationInput
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TranslationRouterTest {
@@ -31,5 +32,33 @@ class TranslationRouterTest {
         }
     }
 
+    @Test
+    fun closeReleasesEveryBackend() {
+        val translators = List(4) { TrackingTranslator() }
+        val router = TranslationRouter(
+            local = translators[0],
+            google2 = translators[1],
+            deepL = translators[2],
+            openAICompatible = translators[3],
+        )
+
+        router.close()
+
+        assertTrue(translators.all { it.closed })
+    }
+
     private fun named(name: String) = TextTranslator { _, _ -> name }
+
+    private class TrackingTranslator : TextTranslator {
+        var closed = false
+
+        override fun translate(
+            input: TranslationInput,
+            settings: TranslationSettings,
+        ): String = input.text
+
+        override fun close() {
+            closed = true
+        }
+    }
 }
