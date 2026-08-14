@@ -23,6 +23,8 @@ class AndroidSystemRecognitionSession(
     private var active = false
     private var runId = 0L
     private var restartAction: Runnable? = null
+    private var semanticEndpointAction: Runnable? = null
+    private val accumulator = SystemRecognitionAccumulator()
     private var onReady: () -> Unit = {}
     private var onUpdate: (RecognitionUpdate) -> Unit = {}
     private var onError: (String) -> Unit = {}
@@ -49,6 +51,8 @@ class AndroidSystemRecognitionSession(
             active = true
             runId += 1
             val currentRun = runId
+            accumulator.reset()
+            cancelSemanticEndpoint()
             releaseRecognizer()
             recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).apply {
                 setRecognitionListener(listener(currentRun))
@@ -84,7 +88,13 @@ class AndroidSystemRecognitionSession(
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-                -> restart(currentRun)
+                -> {
+                    accumulator.commit()?.let {
+                        onUpdate(RecognitionUpdate(it, endpoint = false))
+                        scheduleSemanticEndpoint(currentRun)
+                    }
+                    restart(currentRun)
+                }
 
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> restart(currentRun, BUSY_RETRY_MILLIS)
                 else -> {
@@ -98,18 +108,21 @@ class AndroidSystemRecognitionSession(
 
         override fun onResults(results: Bundle) {
             if (!isActive(currentRun)) return
-            resultText(results)?.let { onUpdate(RecognitionUpdate(it, endpoint = true)) }
+            resultText(results)?.let { finalizeSystemSegment(currentRun, it) }
             restart(currentRun)
         }
 
         override fun onPartialResults(partialResults: Bundle) {
             if (!isActive(currentRun)) return
-            resultText(partialResults)?.let { onUpdate(RecognitionUpdate(it, endpoint = false)) }
+            resultText(partialResults)?.let {
+                cancelSemanticEndpoint()
+                onUpdate(RecognitionUpdate(accumulator.updatePartial(it), endpoint = false))
+            }
         }
 
         override fun onSegmentResults(segmentResults: Bundle) {
             if (!isActive(currentRun)) return
-            resultText(segmentResults)?.let { onUpdate(RecognitionUpdate(it, endpoint = true)) }
+            resultText(segmentResults)?.let { finalizeSystemSegment(currentRun, it) }
         }
 
         override fun onEndOfSegmentedSession() = restart(currentRun)
@@ -122,12 +135,39 @@ class AndroidSystemRecognitionSession(
             ?.trim()
             ?.takeIf(String::isNotEmpty)
 
+    private fun finalizeSystemSegment(currentRun: Long, text: String) {
+        accumulator.commit(text)?.let {
+            onUpdate(RecognitionUpdate(it, endpoint = false))
+            scheduleSemanticEndpoint(currentRun)
+        }
+    }
+
+    private fun scheduleSemanticEndpoint(currentRun: Long) {
+        cancelSemanticEndpoint()
+        semanticEndpointAction = Runnable {
+            if (!isActive(currentRun)) return@Runnable
+            val text = accumulator.text
+            accumulator.reset()
+            semanticEndpointAction = null
+            if (text.isNotBlank()) onUpdate(RecognitionUpdate(text, endpoint = true))
+        }.also {
+            handler.postDelayed(it, SEMANTIC_ENDPOINT_MILLIS)
+        }
+    }
+
+    private fun cancelSemanticEndpoint() {
+        semanticEndpointAction?.let(handler::removeCallbacks)
+        semanticEndpointAction = null
+    }
+
     override fun stop() {
         runOnMain {
             active = false
             runId += 1
             restartAction?.let(handler::removeCallbacks)
             restartAction = null
+            cancelSemanticEndpoint()
+            accumulator.reset()
             releaseRecognizer()
         }
     }
@@ -138,6 +178,8 @@ class AndroidSystemRecognitionSession(
             runId += 1
             restartAction?.let(handler::removeCallbacks)
             restartAction = null
+            cancelSemanticEndpoint()
+            accumulator.reset()
             releaseRecognizer()
         }
     }
@@ -169,6 +211,7 @@ class AndroidSystemRecognitionSession(
     private companion object {
         const val RESTART_DELAY_MILLIS = 150L
         const val BUSY_RETRY_MILLIS = 500L
+        const val SEMANTIC_ENDPOINT_MILLIS = 2_400L
     }
 }
 
@@ -183,9 +226,4 @@ internal fun systemRecognitionIntent(language: String): Intent =
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguageTag(language))
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        putExtra(
-            RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-            RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-        )
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800)
     }

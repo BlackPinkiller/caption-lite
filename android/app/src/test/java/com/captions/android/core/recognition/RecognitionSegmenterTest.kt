@@ -102,6 +102,49 @@ class RecognitionSegmenterTest {
     }
 
     @Test
+    fun `minor revision after a forced commit keeps the consumed boundary`() {
+        var now = 1_000L
+        val segmenter = RecognitionSegmenter(
+            maxChars = 500,
+            maxDurationMillis = 10_000L,
+            nowMillis = { now },
+        )
+        val original =
+            "recognition continues while each phrase had fresh material and avoids repetition"
+        segmenter.update(original)
+        now = 11_000L
+        assertEquals(original, segmenter.update(original).committed)
+        now = 12_000L
+
+        val revised = segmenter.update(
+            "recognition continues while each phrase adds fresh material and avoids repetition " +
+                "before the next idea",
+        )
+
+        assertTrue(revised.committed.isEmpty())
+        assertEquals("before the next idea", revised.active)
+    }
+
+    @Test
+    fun `unrelated cumulative text still starts a new segment`() {
+        var now = 1_000L
+        val segmenter = RecognitionSegmenter(
+            maxChars = 500,
+            maxDurationMillis = 10_000L,
+            nowMillis = { now },
+        )
+        val original = "the first recognition stream contains a long completed thought"
+        segmenter.update(original)
+        now = 11_000L
+        segmenter.update(original)
+        now = 12_000L
+
+        val replacement = segmenter.update("a completely unrelated new recognition stream")
+
+        assertEquals("a completely unrelated new recognition stream", replacement.active)
+    }
+
+    @Test
     fun `chinese punctuation can split continuous text`() {
         val segmenter = RecognitionSegmenter(
             maxChars = 4,

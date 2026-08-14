@@ -37,8 +37,14 @@ class RecognitionSegmenter(
         }
         if (startedAt == 0L) startedAt = now
         if (consumed > 0 && !normalized.startsWith(raw.take(consumed))) {
-            reset()
-            startedAt = now
+            val reconciled = reconcileConsumed(raw.take(consumed), normalized)
+            if (reconciled == null) {
+                reset()
+                startedAt = now
+            } else {
+                consumed = reconciled
+                punctuated = ""
+            }
         }
         raw = normalized
         val current = active
@@ -105,11 +111,34 @@ class RecognitionSegmenter(
         return SplitDecision(split, forced = true)
     }
 
+    private fun reconcileConsumed(previousPrefix: String, revised: String): Int? {
+        val previous = previousPrefix.trimEnd()
+        if (previous.isEmpty()) return null
+        var distances = IntArray(revised.length + 1) { it }
+        previous.forEachIndexed { oldIndex, oldChar ->
+            val next = IntArray(revised.length + 1)
+            next[0] = oldIndex + 1
+            revised.forEachIndexed { newIndex, newChar ->
+                val substitution = distances[newIndex] + if (oldChar == newChar) 0 else 1
+                val deletion = distances[newIndex + 1] + 1
+                val insertion = next[newIndex] + 1
+                next[newIndex + 1] = minOf(substitution, deletion, insertion)
+            }
+            distances = next
+        }
+        val bestIndex = distances.indices.minWithOrNull(
+            compareBy<Int> { distances[it] }.thenBy { kotlin.math.abs(it - previous.length) },
+        ) ?: return null
+        val allowedChanges = maxOf(MIN_RECONCILE_CHANGES, previous.length / 3)
+        return bestIndex.takeIf { distances[it] <= allowedChanges }
+    }
+
     private data class SplitDecision(val index: Int, val forced: Boolean)
 
     private companion object {
         val WHITESPACE = Regex("\\s+")
         val TERMINAL_PUNCTUATION = Regex("[。？！]|[.?!](?=\\s|$)")
+        const val MIN_RECONCILE_CHANGES = 4
 
         fun endsWithTerminalPunctuation(text: String): Boolean =
             text.endsWith('.') || text.endsWith('?') || text.endsWith('!') ||
