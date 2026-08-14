@@ -98,7 +98,7 @@ class AndroidSessionControllerTest {
         recognition.update(RecognitionUpdate("hello world", endpoint = true))
         assertEquals(1, viewModel.state.value.entries.size)
         assertEquals("hello world", viewModel.state.value.entries.single().source)
-        assertTrue(viewModel.state.value.entries.single().current)
+        assertFalse(viewModel.state.value.entries.single().current)
     }
 
     @Test
@@ -226,7 +226,7 @@ class AndroidSessionControllerTest {
 
         assertEquals(listOf(1L to "Hello world."), translation.commits)
         assertEquals("Hello world.", viewModel.state.value.entries.single().source)
-        assertTrue(viewModel.state.value.entries.single().current)
+        assertFalse(viewModel.state.value.entries.single().current)
     }
 
     @Test
@@ -245,7 +245,7 @@ class AndroidSessionControllerTest {
         recognition.update(RecognitionUpdate("", endpoint = true))
 
         assertEquals("keep this partial", viewModel.state.value.entries.single().source)
-        assertTrue(viewModel.state.value.entries.single().current)
+        assertFalse(viewModel.state.value.entries.single().current)
     }
 
     @Test

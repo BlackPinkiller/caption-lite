@@ -31,21 +31,6 @@ class SessionTimelineTest {
     }
 
     @Test
-    fun latestCommittedSentenceKeepsItsHighlightUntilTheNextCueStarts() {
-        val timeline = SessionTimeline()
-        timeline.updateCurrent(1, "first")
-
-        timeline.commitCurrent()
-
-        assertTrue(timeline.entries.single().current)
-
-        timeline.updateCurrent(2, "second")
-
-        assertFalse(timeline.entries[0].current)
-        assertTrue(timeline.entries[1].current)
-    }
-
-    @Test
     fun translationUpdatesTheMatchingCue() {
         val timeline = SessionTimeline()
         timeline.updateCurrent(7, "source")

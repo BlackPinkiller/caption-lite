@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -114,9 +114,10 @@ fun SessionScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
                 ) {
-                    items(state.entries, key = { it.cueId }) { entry ->
+                    itemsIndexed(state.entries, key = { _, entry -> entry.cueId }) { index, entry ->
                         SessionEntryView(
                             entry = entry,
+                            highlighted = index == state.entries.lastIndex,
                             mode = state.displayMode,
                             fontChoice = state.fontChoice,
                             sourceSizeSp = state.sourceSizeSp,
@@ -250,6 +251,7 @@ private fun SessionControls(
 @Composable
 private fun SessionEntryView(
     entry: SessionEntry,
+    highlighted: Boolean,
     mode: DisplayMode,
     fontChoice: FontChoice,
     sourceSizeSp: Int,
@@ -265,7 +267,7 @@ private fun SessionEntryView(
             modifier = Modifier
                 .widthIn(max = maxWidth)
                 .then(
-                    if (entry.current) {
+                    if (highlighted) {
                         Modifier
                             .background(Color(0xFF292B30), RoundedCornerShape(12.dp))
                             .padding(horizontal = 11.dp, vertical = 9.dp)
@@ -278,7 +280,7 @@ private fun SessionEntryView(
             if (mode != DisplayMode.Translation && entry.source.isNotEmpty()) {
                 Text(
                     text = entry.source,
-                    color = if (entry.current) Color(0xFFC9CBD0) else Color(0xFF96999F),
+                    color = if (highlighted) Color(0xFFC9CBD0) else Color(0xFF96999F),
                     fontSize = sourceSizeSp.sp,
                     fontFamily = fontFamily,
                     lineHeight = (sourceSizeSp * 1.16f).sp,
@@ -287,11 +289,11 @@ private fun SessionEntryView(
             if (mode != DisplayMode.Source && entry.translation.isNotEmpty()) {
                 Text(
                     text = entry.translation,
-                    color = if (entry.current) Color.White else Color(0xFF96999F),
+                    color = if (highlighted) Color.White else Color(0xFF96999F),
                     fontSize = translationSizeSp.sp,
                     fontFamily = fontFamily,
                     lineHeight = (translationSizeSp * 1.16f).sp,
-                    fontWeight = if (entry.current) FontWeight.Medium else FontWeight.Normal,
+                    fontWeight = if (highlighted) FontWeight.Medium else FontWeight.Normal,
                 )
             }
         }
