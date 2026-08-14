@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
     }
     private val sessionController get() = runtime.sessionController
     private val modelManager get() = runtime.recognitionModelManager
+    private val systemModelManager get() = runtime.systemRecognitionModelManager
     private val translationModelManager get() = runtime.translationModelManager
     private val screenAwakeController by lazy { AndroidScreenAwakeController(window) }
 
@@ -84,6 +85,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         translationModelManager.configure(sessionViewModel.state.value.translationSettings)
+        systemModelManager.configure(
+            sessionViewModel.state.value.translationSettings.sourceLanguage,
+        )
         if (sessionViewModel.state.value.overlayEnabled && !Settings.canDrawOverlays(this)) {
             sessionViewModel.setOverlayEnabled(false)
         }
@@ -91,6 +95,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by sessionViewModel.state.collectAsStateWithLifecycle()
             val modelState by modelManager.state.collectAsStateWithLifecycle()
+            val systemModelState by systemModelManager.state.collectAsStateWithLifecycle()
             val translationModelState by translationModelManager.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             val sessionActive = state.running || state.starting
@@ -119,6 +124,7 @@ class MainActivity : ComponentActivity() {
                         SettingsScreen(
                             state = state,
                             modelState = modelState,
+                            systemModelState = systemModelState,
                             translationModelState = translationModelState,
                             onRecognitionEngineChanged = {
                                 if (state.running || state.starting) {
@@ -127,14 +133,19 @@ class MainActivity : ComponentActivity() {
                                 }
                                 sessionViewModel.setRecognitionEngine(it)
                                 runtime.applyTranslationSettings()
+                                systemModelManager.configure(
+                                    sessionViewModel.state.value.translationSettings.sourceLanguage,
+                                )
                             },
                             onRecognitionLanguageChanged = { language ->
                                 sessionViewModel.setTranslationSettings(
                                     state.translationSettings.copy(sourceLanguage = language),
                                 )
                                 runtime.applyTranslationSettings()
+                                systemModelManager.configure(language)
                             },
                             onDownloadModel = modelManager::download,
+                            onDownloadSystemModel = systemModelManager::download,
                             onTranslationSettingsChanged = {
                                 sessionViewModel.setTranslationSettings(it)
                                 runtime.applyTranslationSettings()

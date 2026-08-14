@@ -24,9 +24,11 @@ internal fun RecognitionSettingsPage(
     engine: RecognitionEngine,
     language: String,
     modelState: ModelState,
+    systemModelState: ModelState,
     onEngineChanged: (RecognitionEngine) -> Unit,
     onLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
+    onDownloadSystemModel: () -> Unit,
 ) {
     SettingsPage {
         SettingGroup(label = "识别引擎") {
@@ -51,6 +53,36 @@ internal fun RecognitionSettingsPage(
             SettingGroup(label = "本地模型") {
                 RecognitionModelStatus(modelState, onDownloadModel)
             }
+        } else {
+            SettingGroup(label = "系统语言模型") {
+                SystemRecognitionModelStatus(systemModelState, onDownloadSystemModel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemRecognitionModelStatus(state: ModelState, onDownload: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = when (state.phase) {
+                ModelPhase.Missing -> "需要下载"
+                ModelPhase.Downloading -> state.detail.ifEmpty {
+                    state.progressPercent.takeIf { it > 0 }?.let { "下载中 $it%" } ?: "下载中"
+                }
+                ModelPhase.Preparing -> "正在检查"
+                ModelPhase.Ready -> "准备就绪"
+                ModelPhase.Error -> state.detail.ifEmpty { "不可用" }
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.weight(1f))
+        if (state.phase == ModelPhase.Missing || state.phase == ModelPhase.Error) {
+            TextButton(onClick = onDownload) { Text("下载") }
         }
     }
 }

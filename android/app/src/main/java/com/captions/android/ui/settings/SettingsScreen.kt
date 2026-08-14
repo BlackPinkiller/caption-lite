@@ -52,10 +52,12 @@ import com.captions.android.ports.ModelState
 fun SettingsScreen(
     state: SessionUiState,
     modelState: ModelState,
+    systemModelState: ModelState,
     translationModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
+    onDownloadSystemModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
     onDownloadTranslationModel: () -> Unit,
     onDisplayModeChanged: (DisplayMode) -> Unit,
@@ -117,6 +119,7 @@ fun SettingsScreen(
                 SettingsDestination.Home -> SettingsHome(
                     state = state,
                     modelState = modelState,
+                    systemModelState = systemModelState,
                     translationModelState = translationModelState,
                     onOpen = { destination = it },
                 )
@@ -124,9 +127,11 @@ fun SettingsScreen(
                     engine = state.recognitionEngine,
                     language = state.translationSettings.sourceLanguage,
                     modelState = modelState,
+                    systemModelState = systemModelState,
                     onEngineChanged = onRecognitionEngineChanged,
                     onLanguageChanged = onRecognitionLanguageChanged,
                     onDownloadModel = onDownloadModel,
+                    onDownloadSystemModel = onDownloadSystemModel,
                 )
                 SettingsDestination.Translation -> TranslationSettingsPage(
                     settings = state.translationSettings,
@@ -161,6 +166,7 @@ fun SettingsScreen(
 private fun SettingsHome(
     state: SessionUiState,
     modelState: ModelState,
+    systemModelState: ModelState,
     translationModelState: ModelState,
     onOpen: (SettingsDestination) -> Unit,
 ) {
@@ -177,7 +183,11 @@ private fun SettingsHome(
                 summary = recognitionSummary(
                     state.recognitionEngine,
                     state.translationSettings.sourceLanguage,
-                    modelState,
+                    if (state.recognitionEngine == RecognitionEngine.Nemotron) {
+                        modelState
+                    } else {
+                        systemModelState
+                    },
                 ),
                 onClick = { onOpen(SettingsDestination.Recognition) },
             )
@@ -248,7 +258,8 @@ private fun recognitionSummary(
     language: String,
     state: ModelState,
 ): String = when (engine) {
-    RecognitionEngine.AndroidSystem -> "系统识别 · ${languageName(language)}"
+    RecognitionEngine.AndroidSystem ->
+        "系统识别 · ${languageName(language)} · ${modelSummary(state)}"
     RecognitionEngine.Nemotron -> "Nemotron · 英语 · ${modelSummary(state)}"
 }
 

@@ -8,6 +8,7 @@ import com.captions.android.core.translation.TranslationRouter
 import com.captions.android.platform.audio.AndroidMicrophoneInput
 import com.captions.android.platform.model.AndroidNemotronModelManager
 import com.captions.android.platform.recognition.AndroidSystemRecognitionSession
+import com.captions.android.platform.recognition.AndroidSpeechModelManager
 import com.captions.android.platform.recognition.SherpaNemotronRecognitionFactory
 import com.captions.android.platform.session.AndroidSessionController
 import com.captions.android.platform.settings.AndroidSettingsStore
@@ -26,6 +27,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
 
     val sessionStore = SessionStore(settingsStore)
     val recognitionModelManager = AndroidNemotronModelManager(appContext)
+    val systemRecognitionModelManager = AndroidSpeechModelManager(appContext)
     val translationModelManager = GoogleTranslationModelManager()
     private val mutableAppVisible = MutableStateFlow(false)
     val appVisible = mutableAppVisible.asStateFlow()
@@ -47,9 +49,14 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         recognitionSession = QueuedRecognitionSession(
             SherpaNemotronRecognitionFactory(recognitionModelManager::modelDirectory),
         ),
-        systemRecognitionSession = AndroidSystemRecognitionSession(appContext) {
-            sessionStore.state.value.translationSettings.sourceLanguage
-        },
+        systemRecognitionSession = AndroidSystemRecognitionSession(
+            context = appContext,
+            language = {
+                val requested = sessionStore.state.value.translationSettings.sourceLanguage
+                systemRecognitionModelManager.installedLanguageTag(requested) ?: requested
+            },
+            modelReady = systemRecognitionModelManager::isReady,
+        ),
         translationSession = translationSession,
     )
 
@@ -65,6 +72,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     override fun close() {
         sessionController.close()
         recognitionModelManager.close()
+        systemRecognitionModelManager.close()
         translationModelManager.close()
     }
 }

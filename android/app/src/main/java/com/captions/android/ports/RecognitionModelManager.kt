@@ -22,3 +22,13 @@ interface RecognitionModelManager : AutoCloseable {
     fun refresh()
     fun download()
 }
+
+interface RecognitionLanguageModelManager : AutoCloseable {
+    val state: StateFlow<ModelState>
+
+    fun configure(language: String)
+    fun refresh()
+    fun download()
+    fun isReady(language: String): Boolean
+    fun installedLanguageTag(language: String): String?
+}

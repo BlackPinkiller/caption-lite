@@ -15,6 +15,7 @@ import java.util.Locale
 class AndroidSystemRecognitionSession(
     context: Context,
     private val language: () -> String,
+    private val modelReady: (String) -> Boolean,
 ) : DirectRecognitionSession {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -37,6 +38,11 @@ class AndroidSystemRecognitionSession(
                 onError("设备不支持本地系统识别")
                 return@runOnMain
             }
+            val requestedLanguage = language()
+            if (!modelReady(requestedLanguage)) {
+                onError("请先下载系统识别语言")
+                return@runOnMain
+            }
             this.onReady = onReady
             this.onUpdate = onUpdate
             this.onError = onError
@@ -53,18 +59,7 @@ class AndroidSystemRecognitionSession(
 
     private fun listen(currentRun: Long) {
         if (!isActive(currentRun)) return
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguageTag(language()))
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            putExtra(
-                RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-            )
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800)
-        }
-        recognizer?.startListening(intent)
+        recognizer?.startListening(systemRecognitionIntent(language()))
     }
 
     private fun restart(currentRun: Long, delayMillis: Long = RESTART_DELAY_MILLIS) {
@@ -181,3 +176,16 @@ internal fun recognitionLanguageTag(language: String): String =
     Locale.forLanguageTag(language).takeIf { it.language.isNotBlank() }
         ?.toLanguageTag()
         ?: Locale.getDefault().toLanguageTag()
+
+internal fun systemRecognitionIntent(language: String): Intent =
+    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguageTag(language))
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(
+            RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+            RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+        )
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800)
+    }
