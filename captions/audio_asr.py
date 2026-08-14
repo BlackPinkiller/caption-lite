@@ -17,6 +17,7 @@ from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, Recogni
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
 VAD_PRE_ROLL_WINDOWS = 48
+VAD_FLUSH_SAMPLES = 9600
 CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
 
@@ -203,6 +204,12 @@ class AudioAsrWorker(QObject):
                             for speech, vad_endpoint in speech_gate.process(mono):
                                 update = recognition.accept(speech)
                                 text = update.text
+                                if vad_endpoint and text.strip():
+                                    flush = recognition.accept(
+                                        np.zeros(VAD_FLUSH_SAMPLES, dtype=np.float32)
+                                    )
+                                    if flush.text:
+                                        text = flush.text
                                 if text != last_text:
                                     revision += 1
                                     last_text = text

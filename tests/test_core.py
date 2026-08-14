@@ -1184,6 +1184,66 @@ class AudioAsrTests(unittest.TestCase):
         self.assertEqual(endpoints, [True])
         self.assertEqual(resets, [True, True])
 
+    def test_vad_endpoint_flushes_the_recognizer_so_the_tail_is_committed(self) -> None:
+        config = AppConfig()
+        config.asr.silence_min_chars = 4
+        partials: list[str] = []
+
+        class Recognition:
+            def accept(inner_self, samples):
+                is_flush = samples.size > VAD_WINDOW_SIZE * 10
+                if is_flush:
+                    worker.stop()
+                    return SimpleNamespace(
+                        text="complete sentence with tail",
+                        endpoint=False,
+                    )
+                return SimpleNamespace(text="complete sentence", endpoint=False)
+
+            def reset(inner_self) -> None:
+                pass
+
+        class SpeechGate:
+            def __init__(inner_self, vad) -> None:
+                pass
+
+            def process(inner_self, samples):
+                return [(samples, False), (samples, True)]
+
+            def reset(inner_self) -> None:
+                pass
+
+        class Capture:
+            name = "test"
+
+            def __enter__(inner_self):
+                return inner_self
+
+            def __exit__(inner_self, *args) -> None:
+                pass
+
+            def read(inner_self, frames):
+                return np.zeros((frames, 1), dtype=np.float32)
+
+        backend = SimpleNamespace(
+            create_streaming=lambda current: Recognition(),
+            create_vad=lambda current: object(),
+        )
+        audio_source = SimpleNamespace(
+            open_default_output=lambda **kwargs: Capture(),
+        )
+        worker = AudioAsrWorker(
+            config,
+            audio_source=audio_source,
+            recognition_backend=backend,
+        )
+        worker.partial.connect(lambda text, revision: partials.append(text))
+
+        with patch("captions.audio_asr.VadSpeechGate", SpeechGate):
+            worker.run()
+
+        self.assertIn("complete sentence with tail", partials)
+
     def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:
         calls: list[object] = []
         stream = SimpleNamespace(
