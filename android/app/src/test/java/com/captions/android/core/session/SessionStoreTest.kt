@@ -64,11 +64,24 @@ class SessionStoreTest {
         assertEquals("zh", store.state.value.translationSettings.targetLanguage)
     }
 
+    @Test
+    fun `split punctuation toggle updates state and persists`() {
+        val settings = MemorySettingsStore()
+        val store = SessionStore(settings)
+
+        assertTrue(store.state.value.splitPunctuation)
+        store.setSplitPunctuation(false)
+
+        assertFalse(store.state.value.splitPunctuation)
+        assertFalse(settings.splitPunctuation)
+    }
+
     private class MemorySettingsStore(
         private var recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
         var translation: TranslationSettings = TranslationSettings(),
     ) : SettingsStore {
         var appearance = AppearanceSettings()
+        var splitPunctuation = true
 
         override fun loadAppearance(): AppearanceSettings = appearance
 
@@ -80,6 +93,12 @@ class SessionStoreTest {
 
         override fun saveRecognitionEngine(engine: RecognitionEngine) {
             recognitionEngine = engine
+        }
+
+        override fun loadSplitPunctuation(): Boolean = splitPunctuation
+
+        override fun saveSplitPunctuation(enabled: Boolean) {
+            splitPunctuation = enabled
         }
 
         override fun loadTranslation(): TranslationSettings = translation

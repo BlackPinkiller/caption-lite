@@ -23,6 +23,7 @@ interface SessionStateController {
     fun setOverlayBackgroundEnabled(enabled: Boolean)
     fun setOverlayPosition(position: OverlayPosition)
     fun setRecognitionEngine(engine: RecognitionEngine)
+    fun setSplitPunctuation(enabled: Boolean)
     fun setTranslationSettings(settings: TranslationSettings)
     fun showMessage(message: String)
     fun updateCurrent(cueId: Long, source: String, translation: String? = null)

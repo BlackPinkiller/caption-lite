@@ -23,6 +23,10 @@ class AndroidSessionController(
     private val startRequested = AtomicBoolean(false)
     private var cueId = 1L
 
+    fun setSplitPunctuation(enabled: Boolean) {
+        segmenter.splitPunctuation = enabled
+    }
+
     override fun start() {
         if (!viewModel.state.value.microphoneEnabled) {
             viewModel.start()

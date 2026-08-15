@@ -78,6 +78,21 @@ class AndroidSessionControllerTest {
     }
 
     @Test
+    fun splitPunctuationToggleReachesTheSegmenter() {
+        val segmenter = RecognitionSegmenter()
+        val controller = AndroidSessionController(
+            FakeAudioInput(),
+            SessionViewModel(MemorySettingsStore()),
+            segmenter = segmenter,
+        )
+
+        assertTrue(segmenter.splitPunctuation)
+        controller.setSplitPunctuation(false)
+
+        assertFalse(segmenter.splitPunctuation)
+    }
+
+    @Test
     fun localRecognitionLoadsBeforeMicrophoneCaptureAndPublishesOneCue() {
         val audio = FakeAudioInput()
         val recognition = FakeSampleRecognitionSession()
@@ -413,6 +428,10 @@ class AndroidSessionControllerTest {
         override fun saveRecognitionEngine(engine: RecognitionEngine) {
             this.engine = engine
         }
+
+        override fun loadSplitPunctuation(): Boolean = true
+
+        override fun saveSplitPunctuation(enabled: Boolean) = Unit
 
         override fun loadTranslation(): TranslationSettings = TranslationSettings()
 

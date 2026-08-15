@@ -9,6 +9,8 @@ interface SettingsStore {
     fun saveAppearance(settings: AppearanceSettings)
     fun loadRecognitionEngine(): RecognitionEngine
     fun saveRecognitionEngine(engine: RecognitionEngine)
+    fun loadSplitPunctuation(): Boolean
+    fun saveSplitPunctuation(enabled: Boolean)
     fun loadTranslation(): TranslationSettings
     fun saveTranslation(settings: TranslationSettings)
 }

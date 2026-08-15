@@ -83,6 +83,7 @@ data class SessionUiState(
     val overlayBackgroundEnabled: Boolean = true,
     val overlayPosition: OverlayPosition = OverlayPosition.Bottom,
     val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
+    val splitPunctuation: Boolean = true,
     val translationSettings: TranslationSettings = TranslationSettings(),
     val entries: List<SessionEntry> = emptyList(),
     val message: String = "",

@@ -55,6 +55,13 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         preferences.edit().putString(KEY_RECOGNITION_ENGINE, engine.name).apply()
     }
 
+    override fun loadSplitPunctuation(): Boolean =
+        preferences.getBoolean(KEY_SPLIT_PUNCTUATION, true)
+
+    override fun saveSplitPunctuation(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_SPLIT_PUNCTUATION, enabled).apply()
+    }
+
     override fun loadTranslation(): TranslationSettings = TranslationSettings(
         enabled = preferences.getBoolean(KEY_TRANSLATION_ENABLED, true),
         engine = enumValue(
@@ -107,6 +114,7 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_OVERLAY_BACKGROUND = "overlay_background"
         const val KEY_OVERLAY_POSITION = "overlay_position"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
+        const val KEY_SPLIT_PUNCTUATION = "split_punctuation"
         const val KEY_TRANSLATION_ENABLED = "translation_enabled"
         const val KEY_TRANSLATION_ENGINE = "translation_engine"
         const val KEY_SOURCE_LANGUAGE = "translation_source_language"

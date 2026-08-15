@@ -57,6 +57,7 @@ fun SettingsScreen(
     gemma4ModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
+    onSplitPunctuationChanged: (Boolean) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
@@ -129,10 +130,12 @@ fun SettingsScreen(
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
                     engine = state.recognitionEngine,
                     language = state.translationSettings.sourceLanguage,
+                    splitPunctuation = state.splitPunctuation,
                     modelState = modelState,
                     systemModelState = systemModelState,
                     onEngineChanged = onRecognitionEngineChanged,
                     onLanguageChanged = onRecognitionLanguageChanged,
+                    onSplitPunctuationChanged = onSplitPunctuationChanged,
                     onDownloadModel = onDownloadModel,
                     onDownloadSystemModel = onDownloadSystemModel,
                 )

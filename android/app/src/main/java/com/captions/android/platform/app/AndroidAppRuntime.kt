@@ -2,6 +2,7 @@ package com.captions.android.platform.app
 
 import android.content.Context
 import com.captions.android.core.recognition.QueuedRecognitionSession
+import com.captions.android.core.recognition.RecognitionSegmenter
 import com.captions.android.core.session.SessionStore
 import com.captions.android.core.translation.RealtimeTranslationSession
 import com.captions.android.core.translation.TranslationRouter
@@ -50,6 +51,9 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     val sessionController = AndroidSessionController(
         audioInput = AndroidMicrophoneInput(),
         viewModel = sessionStore,
+        segmenter = RecognitionSegmenter(
+            splitPunctuation = sessionStore.state.value.splitPunctuation,
+        ),
         recognitionSession = QueuedRecognitionSession(
             SherpaNemotronRecognitionFactory(
                 recognitionModelManager::modelDirectory,

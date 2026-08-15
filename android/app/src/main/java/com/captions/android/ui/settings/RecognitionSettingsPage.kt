@@ -23,10 +23,12 @@ import com.captions.android.ports.ModelState
 internal fun RecognitionSettingsPage(
     engine: RecognitionEngine,
     language: String,
+    splitPunctuation: Boolean,
     modelState: ModelState,
     systemModelState: ModelState,
     onEngineChanged: (RecognitionEngine) -> Unit,
     onLanguageChanged: (String) -> Unit,
+    onSplitPunctuationChanged: (Boolean) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
 ) {
@@ -47,6 +49,13 @@ internal fun RecognitionSettingsPage(
                 selected = if (engine == RecognitionEngine.Nemotron) "en" else language,
                 onSelected = onLanguageChanged,
                 enabled = engine == RecognitionEngine.AndroidSystem,
+            )
+        }
+        SettingGroup(label = "分句") {
+            ToggleSetting(
+                label = "标点分句",
+                checked = splitPunctuation,
+                onCheckedChange = onSplitPunctuationChanged,
             )
         }
         if (engine == RecognitionEngine.Nemotron) {

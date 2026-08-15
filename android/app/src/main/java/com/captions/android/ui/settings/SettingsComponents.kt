@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.Switch
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -45,6 +46,22 @@ internal fun SettingGroup(label: String, content: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         content()
+    }
+}
+
+@Composable
+internal fun ToggleSetting(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 15.sp)
+        Spacer(Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

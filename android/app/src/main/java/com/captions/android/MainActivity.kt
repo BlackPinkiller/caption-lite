@@ -146,6 +146,10 @@ class MainActivity : ComponentActivity() {
                                 runtime.applyTranslationSettings()
                                 systemModelManager.configure(language)
                             },
+                            onSplitPunctuationChanged = { enabled ->
+                                sessionViewModel.setSplitPunctuation(enabled)
+                                sessionController.setSplitPunctuation(enabled)
+                            },
                             onDownloadModel = modelManager::download,
                             onDownloadSystemModel = systemModelManager::download,
                             onTranslationSettingsChanged = {

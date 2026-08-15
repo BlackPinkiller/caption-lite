@@ -24,6 +24,7 @@ class SessionStore(
                 overlayBackgroundEnabled = it.overlayBackgroundEnabled,
                 overlayPosition = it.overlayPosition,
                 recognitionEngine = initialRecognitionEngine,
+                splitPunctuation = settingsStore.loadSplitPunctuation(),
                 translationSettings = initialTranslationSettings,
             )
         },
@@ -103,6 +104,14 @@ class SessionStore(
         )
         settingsStore.saveRecognitionEngine(engine)
         settingsStore.saveTranslation(translationSettings)
+    }
+
+    override fun setSplitPunctuation(enabled: Boolean) {
+        mutableState.value = mutableState.value.copy(
+            splitPunctuation = enabled,
+            message = "",
+        )
+        settingsStore.saveSplitPunctuation(enabled)
     }
 
     override fun setTranslationSettings(settings: TranslationSettings) {
