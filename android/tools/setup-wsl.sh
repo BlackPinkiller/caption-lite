@@ -13,9 +13,6 @@ readonly command_tools_sha256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5
 readonly sherpa_version="1.13.5"
 readonly sherpa_aar="$project_dir/app/libs/sherpa-onnx-$sherpa_version.aar"
 readonly sherpa_sha256="6419cd8bc983e0c4fab06067f0fe0313fdc0f7103818ac1e7a08d50787b7a82b"
-readonly llama_src_dir="$project_dir/llama/llama-cpp"
-# STQ kernel (llama.cpp PR #22836) head, verified for Hy-MT2-1.8B-1.25Bit-GGUF.
-readonly llama_stq_commit="1e411d8f5a1e23525fa3265dfb4bd76265465397"
 
 mkdir -p "$cache_dir" "$sdk_dir"
 mkdir -p "$project_dir/app/libs"
@@ -87,22 +84,5 @@ if [[ ! -x "$project_dir/gradlew" ]]; then
         --gradle-version "$gradle_version" \
         --distribution-type bin
 fi
-
-# Hy-MT2 uses the STQ1_0 kernel from llama.cpp PR #22836, not yet on master.
-# Pin the verified commit so a fresh checkout builds the same native library.
-if [[ ! -d "$llama_src_dir/.git" ]]; then
-    git clone --no-checkout https://github.com/ggml-org/llama.cpp.git "$llama_src_dir"
-    git -C "$llama_src_dir" checkout "$llama_stq_commit"
-fi
-
-# The official Hy-MT2 GGUF stores STQ1_0 tensors with type code 42. Upstream
-# shifted the enum after Q2_0 landed (STQ1_0 became 43), so the PR head can no
-# longer read the file. Swap the two codes to restore compatibility. This build
-# only loads the Hy-MT2 model, so moving Q2_0 to the unused code 43 is safe.
-# Idempotent: after the swap neither pattern matches again.
-sed -i \
-    -e 's/GGML_TYPE_Q2_0    = 42,/GGML_TYPE_STQ1_0  = 42,/' \
-    -e 's/GGML_TYPE_STQ1_0  = 43,/GGML_TYPE_Q2_0    = 43,/' \
-    "$llama_src_dir/ggml/include/ggml.h"
 
 echo "Android toolchain ready: $sdk_dir"
