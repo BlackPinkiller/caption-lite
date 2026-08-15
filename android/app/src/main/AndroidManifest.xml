@@ -17,6 +17,7 @@
     <application
         android:name=".CaptionsApplication"
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
         android:label="实时字幕"
         android:supportsRtl="true"
         android:theme="@style/Theme.Captions">
