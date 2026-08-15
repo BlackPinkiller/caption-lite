@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from enum import Enum
 from types import TracebackType
 from typing import Protocol
 
 import numpy as np
+
+
+class AudioCaptureKind(str, Enum):
+    SYSTEM_OUTPUT = "system_output"
+    MICROPHONE = "microphone"
 
 
 class AudioCapture(Protocol):
@@ -27,9 +33,13 @@ class AudioCapture(Protocol):
 
 
 class AudioSource(Protocol):
-    """Open the host's current system-playback audio stream."""
+    """Open the host's default audio stream for recognition."""
 
-    def open_default_output(
+    @property
+    def capture_kind(self) -> AudioCaptureKind:
+        ...
+
+    def open_default(
         self,
         *,
         sample_rate: int,

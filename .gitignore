@@ -12,3 +12,14 @@ __pycache__/
 runtime/
 models/
 config.json
+
+# Android / Gradle
+/android/.gradle/
+/android/.kotlin/
+/android/local.properties
+/android/**/build/
+/android/llama/llama-cpp/
+/android/llama/.cxx/
+/android/.idea/
+/android/app/libs/*.aar
+*.iml

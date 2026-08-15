@@ -41,6 +41,7 @@ from captions.audio_asr import (
     AudioAsrWorker,
     AutoStandbyDetector,
     VadSpeechGate,
+    capture_status_text,
     should_commit_endpoint,
 )
 from captions.config import (
@@ -69,6 +70,7 @@ from captions.core.prompt_template import (
 )
 from captions.model_download import ModelDownloadWorker
 from captions.platforms.windows.audio_source import _record_soundcard_samples
+from captions.ports.audio_source import AudioCaptureKind
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
 from captions.translation import (
@@ -95,28 +97,57 @@ from captions.ui.settings_dialog import (
 
 
 class SegmenterTests(unittest.TestCase):
-    def test_terminal_punctuation_requires_a_followup_update(self) -> None:
+    def test_trailing_punctuation_commits_immediately(self) -> None:
         segmenter = Segmenter()
-        first = segmenter.update("Hello world.", now=1)
-        second = segmenter.update("Hello world.", now=1.56)
-        self.assertFalse(first.committed)
-        self.assertEqual(second.committed, "Hello world.")
+        update = segmenter.update("Hello world.", now=1)
+        self.assertEqual(update.active, "")
+        self.assertEqual([c.text for c in update.commits], ["Hello world."])
+        self.assertFalse(update.commits[0].forced)
 
-    def test_following_text_is_retained(self) -> None:
+    def test_mid_text_boundary_commits_and_keeps_tail_active(self) -> None:
         segmenter = Segmenter()
-        segmenter.update("One.", now=1)
-        update = segmenter.update("One. Two", now=1.56)
-        self.assertEqual(update.committed, "One.")
-        self.assertEqual(update.active, "Two")
+        update = segmenter.update("Hello world. How are you", now=1)
+        self.assertEqual([c.text for c in update.commits], ["Hello world."])
+        self.assertEqual(update.active, "How are you")
+
+    def test_multiple_boundaries_commit_each_sentence_as_own_cue(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("One. Two. Three", now=1)
+        self.assertEqual([c.text for c in update.commits], ["One.", "Two."])
+        self.assertEqual(update.active, "Three")
+
+    def test_short_fragment_below_floor_stays_active(self) -> None:
+        segmenter = Segmenter(min_commit_chars=4)
+        update = segmenter.update("ok.", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "ok.")
+
+    def test_abbreviation_period_is_not_a_boundary(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("Mr. Smith is here", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "Mr. Smith is here")
+
+    def test_abbreviation_with_later_boundary_skips_the_initial(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("Mr. Smith is here. Next", now=1)
+        self.assertEqual([c.text for c in update.commits], ["Mr. Smith is here."])
+        self.assertEqual(update.active, "Next")
+
+    def test_punctuation_disabled_defers_to_silence_and_limits(self) -> None:
+        segmenter = Segmenter(split_punctuation=False)
+        update = segmenter.update("Hello world. More", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "Hello world. More")
 
     def test_long_text_is_forced_at_a_word_boundary(self) -> None:
         segmenter = Segmenter(
             max_chars=20, split_lookback_chars=4, split_lookahead_chars=5
         )
         update = segmenter.update("one two three four five six", now=1)
-        self.assertTrue(update.forced)
-        self.assertTrue(update.committed)
-        self.assertFalse(update.committed.endswith(" f"))
+        self.assertTrue(update.commits)
+        self.assertTrue(update.commits[-1].forced)
+        self.assertFalse(update.commits[-1].text.endswith(" f"))
 
     def test_repeated_text_never_moves_the_consumed_position_backwards(self) -> None:
         segmenter = Segmenter(
@@ -140,9 +171,12 @@ class SegmenterTests(unittest.TestCase):
         waiting = segmenter.update("one two three four five six", now=1)
         committed = segmenter.update("one two three four five six seven.", now=2)
 
-        self.assertFalse(waiting.committed)
-        self.assertEqual(committed.committed, "one two three four five six seven.")
-        self.assertFalse(committed.forced)
+        self.assertEqual(waiting.commits, ())
+        self.assertEqual(
+            [c.text for c in committed.commits],
+            ["one two three four five six seven."],
+        )
+        self.assertFalse(committed.commits[0].forced)
 
     def test_time_limit_commits_the_whole_active_text(self) -> None:
         segmenter = Segmenter(max_chars=240, max_seconds=10)
@@ -152,8 +186,16 @@ class SegmenterTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            update.committed, "one sentence is still being spoken very slowly"
+            [c.text for c in update.commits],
+            ["one sentence is still being spoken very slowly"],
         )
+        self.assertEqual(update.active, "")
+
+    def test_flush_commits_the_remaining_active_text(self) -> None:
+        segmenter = Segmenter()
+        segmenter.update("one sentence", now=1)
+        update = segmenter.flush()
+        self.assertEqual([c.text for c in update.commits], ["one sentence"])
         self.assertEqual(update.active, "")
 
 
@@ -892,7 +934,7 @@ class CaptureLifecycleTests(unittest.TestCase):
             capture_paused=False,
             model_loaded=True,
             segmenter=SimpleNamespace(
-                flush=lambda forced=True: SimpleNamespace(committed="")
+                flush=lambda forced=True: SimpleNamespace(commits=())
             ),
             overlay=SimpleNamespace(
                 set_capturing=lambda value: events.append(f"overlay:{value}")
@@ -1091,6 +1133,24 @@ class TaskSessionCleanupTests(unittest.TestCase):
 
 
 class AudioAsrTests(unittest.TestCase):
+    def test_capture_status_matches_the_platform_input_kind(self) -> None:
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.SYSTEM_OUTPUT, "connecting"),
+            "正在连接系统播放设备…",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.MICROPHONE, "connecting"),
+            "正在连接麦克风…",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.SYSTEM_OUTPUT, "reconnecting"),
+            "播放设备已变化，正在重连",
+        )
+        self.assertEqual(
+            capture_status_text(AudioCaptureKind.MICROPHONE, "reconnecting"),
+            "麦克风已变化，正在重连",
+        )
+
     def test_asr_endpoint_commits_an_extremely_short_sentence(self) -> None:
         self.assertTrue(
             should_commit_endpoint(
@@ -1169,7 +1229,8 @@ class AudioAsrTests(unittest.TestCase):
             create_vad=lambda current: object(),
         )
         audio_source = SimpleNamespace(
-            open_default_output=lambda **kwargs: Capture()
+            capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+            open_default=lambda **kwargs: Capture(),
         )
         worker = AudioAsrWorker(
             config,
@@ -1230,7 +1291,8 @@ class AudioAsrTests(unittest.TestCase):
             create_vad=lambda current: object(),
         )
         audio_source = SimpleNamespace(
-            open_default_output=lambda **kwargs: Capture(),
+            capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+            open_default=lambda **kwargs: Capture(),
         )
         worker = AudioAsrWorker(
             config,
@@ -1243,6 +1305,7 @@ class AudioAsrTests(unittest.TestCase):
             worker.run()
 
         self.assertIn("complete sentence with tail", partials)
+
 
     def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:
         calls: list[object] = []

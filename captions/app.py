@@ -56,6 +56,8 @@ class CaptionApplication(QObject):
             max_seconds=self.config.segmentation.max_seconds,
             split_lookback_chars=self.config.segmentation.split_lookback_chars,
             split_lookahead_chars=self.config.segmentation.split_lookahead_chars,
+            split_punctuation=self.config.segmentation.split_punctuation,
+            min_commit_chars=self.config.asr.silence_min_chars,
         )
         self.translation_session = TranslationSession(self, self.diagnostics)
         self.display_generation = 0
@@ -271,8 +273,8 @@ class CaptionApplication(QObject):
             return
         self.capture_session.pause()
         update = self.segmenter.flush(forced=True)
-        if update.committed:
-            self._commit(update.committed, True)
+        for commit in update.commits:
+            self._commit(commit.text, True)
         self.capturing = False
         self.capture_paused = True
         self.auto_standby = False
@@ -314,8 +316,8 @@ class CaptionApplication(QObject):
         if getattr(self, "closing", False):
             return
         update = self.segmenter.update(raw)
-        if update.committed:
-            self._commit(update.committed, update.forced)
+        for commit in update.commits:
+            self._commit(commit.text, commit.forced)
         active = update.active
         if active:
             self.history.set_live(source=active)
@@ -339,21 +341,21 @@ class CaptionApplication(QObject):
         if getattr(self, "closing", False):
             return
         update = self.segmenter.flush()
-        getattr(self, "diagnostics", NULL_DIAGNOSTICS).event(
-            "segment.flushed",
-            committed=update.committed,
-            forced=update.forced,
-        )
-        if update.committed:
-            self._commit(update.committed, update.forced)
+        for commit in update.commits:
+            getattr(self, "diagnostics", NULL_DIAGNOSTICS).event(
+                "segment.flushed",
+                committed=commit.text,
+                forced=commit.forced,
+            )
+            self._commit(commit.text, commit.forced)
 
     @Slot(bool)
     def _auto_standby_changed(self, standby: bool) -> None:
         self.auto_standby = standby
         if standby:
             update = self.segmenter.flush(forced=True)
-            if update.committed:
-                self._commit(update.committed, True)
+            for commit in update.commits:
+                self._commit(commit.text, True)
             self.overlay.set_capturing(False)
             self._set_status("自动待机")
         elif self.capturing:
@@ -606,6 +608,8 @@ class CaptionApplication(QObject):
         self.segmenter.split_lookahead_chars = (
             config.segmentation.split_lookahead_chars
         )
+        self.segmenter.split_punctuation = config.segmentation.split_punctuation
+        self.segmenter.min_commit_chars = config.asr.silence_min_chars
         self.overlay.config = config
         self.overlay.canvas.set_style(config.subtitle)
         CaptionApplication._apply_display_mode(self)
