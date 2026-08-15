@@ -33,6 +33,9 @@
             android:name=".platform.service.CaptionSessionService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
     </application>
 
 </manifest>

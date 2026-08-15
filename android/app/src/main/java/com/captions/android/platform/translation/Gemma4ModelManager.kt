@@ -6,10 +6,10 @@ import android.net.Uri
 import android.util.Log
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.core.session.TranslationSettings
-import com.captions.android.hymt.HyMt2Engine
 import com.captions.android.ports.ModelPhase
 import com.captions.android.ports.ModelState
 import com.captions.android.ports.TranslationModelManager
+import com.google.ai.edge.litertlm.Backend
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.Executors
@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-class HyMt2ModelManager(context: Context) : TranslationModelManager {
+class Gemma4ModelManager(context: Context) : TranslationModelManager {
     private val appContext = context.applicationContext
     private val downloadManager = appContext.getSystemService(DownloadManager::class.java)
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -34,9 +34,10 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
     private val mutableState = MutableStateFlow(ModelState(ModelPhase.Missing))
     private var monitorJob: Job? = null
     private val engineThread = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "captions-hymt").apply { isDaemon = true }
+        Thread(task, "captions-gemma4").apply { isDaemon = true }
     }
     private val engineLoading = AtomicBoolean(false)
+    private val engine = Gemma4Engine(appContext.cacheDir.absolutePath)
 
     override val state: StateFlow<ModelState> = mutableState.asStateFlow()
 
@@ -48,9 +49,11 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
 
     fun modelFile(): File = File(modelDirectory(), MODEL_FILE_NAME)
 
+    fun generate(prompt: String, maxTokens: Int): String = engine.generate(prompt, maxTokens)
+
     override fun configure(settings: TranslationSettings) {
         this.settings = settings
-        if (settings.engine != TranslationEngine.HyMt2) {
+        if (settings.engine != TranslationEngine.Gemma4) {
             unloadEngine()
             return
         }
@@ -71,8 +74,8 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
                 cleanupFailedDownload()
                 modelDirectory().mkdirs()
                 val request = DownloadManager.Request(Uri.parse(MODEL_URL))
-                    .setTitle("HyMT2 · ${MODEL_FILE_NAME}")
-                    .setDescription("实时字幕 · 约 440 MB")
+                    .setTitle("Gemma 4 · ${MODEL_FILE_NAME}")
+                    .setDescription("实时字幕 · 约 2.0 GB")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                     .setDestinationUri(Uri.fromFile(modelFile()))
                     .setAllowedOverRoaming(false)
@@ -173,11 +176,11 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
     }
 
     private fun loadEngine() {
-        if (settings.engine != TranslationEngine.HyMt2) return
-        if (!HyMt2Engine.loaded && engineLoading.compareAndSet(false, true)) {
+        if (settings.engine != TranslationEngine.Gemma4) return
+        if (!engine.loaded && engineLoading.compareAndSet(false, true)) {
             engineThread.execute {
                 runCatching {
-                    val ok = HyMt2Engine.load(modelFile().absolutePath, N_CTX, N_THREADS)
+                    val ok = engine.load(modelFile().absolutePath, Backend.GPU())
                     Log.d(LOG_TAG, "load engine ok=$ok")
                     if (!ok) {
                         mutableState.value = ModelState(ModelPhase.Error, detail = "模型加载失败")
@@ -193,23 +196,23 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
     }
 
     private fun unloadEngine() {
-        if (HyMt2Engine.loaded || engineLoading.get()) {
+        if (engine.loaded || engineLoading.get()) {
             engineThread.execute {
-                HyMt2Engine.unload()
+                engine.close()
                 engineLoading.set(false)
             }
         }
     }
 
     override fun isReady(settings: TranslationSettings): Boolean =
-        settings.engine == TranslationEngine.HyMt2 &&
+        settings.engine == TranslationEngine.Gemma4 &&
             modelReady() &&
-            HyMt2Engine.loaded
+            engine.loaded
 
     override fun close() {
         scope.cancel()
         monitorJob?.cancel()
-        engineThread.execute { HyMt2Engine.unload() }
+        engineThread.execute { engine.close() }
         engineThread.shutdown()
     }
 
@@ -228,24 +231,22 @@ class HyMt2ModelManager(context: Context) : TranslationModelManager {
 
     private fun modelDirectory(): File = File(
         requireNotNull(appContext.getExternalFilesDir(null)),
-        "models/HyMT2-1.8B-1.25Bit",
+        "models/Gemma4-E2B",
     )
 
     private data class DownloadResult(val status: Int, val downloadedBytes: Long)
 
     private companion object {
-        const val LOG_TAG = "CaptionsHyMt2"
-        const val PREFERENCES = "captions_hymt_downloads"
-        const val DOWNLOAD_ID_KEY = "hymt_download_id"
+        const val LOG_TAG = "CaptionsGemma4"
+        const val PREFERENCES = "captions_gemma4_downloads"
+        const val DOWNLOAD_ID_KEY = "gemma4_download_id"
         const val POLL_INTERVAL_MILLIS = 750L
-        const val MODEL_FILE_NAME = "Hy-MT2-1.8B-1.25Bit.gguf"
-        const val MODEL_SIZE = 461_860_800L
-        const val MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
-        const val MODEL_REVISION = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
+        const val MODEL_FILE_NAME = "gemma-4-E2B-it-gpu.litertlm"
+        const val MODEL_SIZE = 2_008_432_640L
+        const val MODEL_SHA256 = "a53a59001894c58e6bdb5b9b227709f91a2e3e556baa7d85acf9c55402ba5cf5"
+        const val MODEL_REVISION = "a53a59001894c58e6bdb5b9b227709f91a2e3e556baa7d85acf9c55402ba5cf5"
         const val MODEL_URL =
-            "https://huggingface.co/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/$MODEL_FILE_NAME"
-        const val N_CTX = 1024
-        const val N_THREADS = 4
+            "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/$MODEL_FILE_NAME"
     }
 }
 

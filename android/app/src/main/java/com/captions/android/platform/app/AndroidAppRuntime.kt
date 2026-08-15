@@ -16,9 +16,9 @@ import com.captions.android.platform.translation.DeepLTranslator
 import com.captions.android.platform.translation.Google2Translator
 import com.captions.android.platform.translation.AndroidOnDeviceTranslator
 import com.captions.android.platform.translation.AndroidTranslationModelManager
-import com.captions.android.platform.translation.HyMt2ModelManager
+import com.captions.android.platform.translation.Gemma4ModelManager
 import com.captions.android.platform.translation.OpenAICompatibleTranslator
-import com.captions.android.platform.translation.hyMt2Translator
+import com.captions.android.platform.translation.gemma4Translator
 import com.captions.android.platform.translation.UrlConnectionHttpClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,7 +31,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     val recognitionModelManager = AndroidNemotronModelManager(appContext)
     val systemRecognitionModelManager = AndroidSpeechModelManager(appContext)
     val translationModelManager = AndroidTranslationModelManager(appContext)
-    val hyMt2ModelManager = HyMt2ModelManager(appContext)
+    val gemma4ModelManager = Gemma4ModelManager(appContext)
     private val mutableAppVisible = MutableStateFlow(false)
     val appVisible = mutableAppVisible.asStateFlow()
 
@@ -42,7 +42,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
                 google2 = Google2Translator(httpClient),
                 deepL = DeepLTranslator(httpClient),
                 openAICompatible = OpenAICompatibleTranslator(httpClient),
-                hyMt2 = hyMt2Translator(hyMt2ModelManager),
+                gemma4 = gemma4Translator(gemma4ModelManager),
             )
         },
     )
@@ -70,7 +70,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     fun applyTranslationSettings() {
         translationSession.cancelPending()
         translationModelManager.configure(sessionStore.state.value.translationSettings)
-        hyMt2ModelManager.configure(sessionStore.state.value.translationSettings)
+        gemma4ModelManager.configure(sessionStore.state.value.translationSettings)
     }
 
     fun setAppVisible(visible: Boolean) {
@@ -82,6 +82,6 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         recognitionModelManager.close()
         systemRecognitionModelManager.close()
         translationModelManager.close()
-        hyMt2ModelManager.close()
+        gemma4ModelManager.close()
     }
 }

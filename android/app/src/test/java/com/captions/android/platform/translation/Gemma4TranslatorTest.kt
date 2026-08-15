@@ -6,11 +6,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class HyMt2TranslatorTest {
+class Gemma4TranslatorTest {
     @Test
     fun sameLanguageReturnsTheSourceWithoutRunningInference() {
         var generated = false
-        val translator = HyMt2Translator(
+        val translator = Gemma4Translator(
             ready = { error("must not be consulted") },
             generate = { _, _ ->
                 generated = true
@@ -29,10 +29,10 @@ class HyMt2TranslatorTest {
 
     @Test
     fun usesTheOfficialPromptAndTrimsTheModelOutput() {
-        val translator = HyMt2Translator(
+        val translator = Gemma4Translator(
             ready = { true },
             generate = { prompt, maxTokens ->
-                assertEquals(HyMt2Translator.MAX_TOKENS, maxTokens)
+                assertEquals(Gemma4Translator.MAX_TOKENS, maxTokens)
                 assertTrue(prompt.contains("Translate the following text into Chinese"))
                 assertTrue(prompt.contains("Hello"))
                 "  你好  "
@@ -49,7 +49,7 @@ class HyMt2TranslatorTest {
 
     @Test
     fun passesSubtitleContextIntoThePrompt() {
-        val translator = HyMt2Translator(
+        val translator = Gemma4Translator(
             ready = { true },
             generate = { prompt, _ ->
                 assertTrue(prompt.contains("[Background Information]"))
@@ -68,7 +68,7 @@ class HyMt2TranslatorTest {
 
     @Test
     fun failsWhenTheModelIsNotReady() {
-        val translator = HyMt2Translator(
+        val translator = Gemma4Translator(
             ready = { false },
             generate = { _, _ -> error("must not run") },
         )

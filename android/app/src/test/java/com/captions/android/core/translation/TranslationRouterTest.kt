@@ -16,7 +16,7 @@ class TranslationRouterTest {
             google2 = named("google"),
             deepL = named("deepl"),
             openAICompatible = named("llm"),
-            hyMt2 = named("hymt"),
+            gemma4 = named("gemma4"),
         )
 
         TranslationEngine.entries.forEach { engine ->
@@ -25,7 +25,7 @@ class TranslationRouterTest {
                 TranslationEngine.Google2 -> "google"
                 TranslationEngine.DeepL -> "deepl"
                 TranslationEngine.OpenAICompatible -> "llm"
-                TranslationEngine.HyMt2 -> "hymt"
+                TranslationEngine.Gemma4 -> "gemma4"
             }
             assertEquals(
                 expected,
@@ -42,7 +42,7 @@ class TranslationRouterTest {
             google2 = translators[1],
             deepL = translators[2],
             openAICompatible = translators[3],
-            hyMt2 = translators[4],
+            gemma4 = translators[4],
         )
 
         router.close()

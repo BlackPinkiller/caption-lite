@@ -28,7 +28,7 @@ enum class TranslationEngine {
     Google2,
     DeepL,
     OpenAICompatible,
-    HyMt2,
+    Gemma4,
 }
 
 data class TranslationSettings(

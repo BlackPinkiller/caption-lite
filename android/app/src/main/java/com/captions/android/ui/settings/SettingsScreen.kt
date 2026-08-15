@@ -54,14 +54,14 @@ fun SettingsScreen(
     modelState: ModelState,
     systemModelState: ModelState,
     translationModelState: ModelState,
-    hyMt2ModelState: ModelState,
+    gemma4ModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
     onDownloadTranslationModel: () -> Unit,
-    onDownloadHyMt2Model: () -> Unit,
+    onDownloadGemma4Model: () -> Unit,
     onDisplayModeChanged: (DisplayMode) -> Unit,
     onFontChoiceChanged: (FontChoice) -> Unit,
     onSourceSizeChanged: (Int) -> Unit,
@@ -123,7 +123,7 @@ fun SettingsScreen(
                     modelState = modelState,
                     systemModelState = systemModelState,
                     translationModelState = translationModelState,
-                    hyMt2ModelState = hyMt2ModelState,
+                    gemma4ModelState = gemma4ModelState,
                     onOpen = { destination = it },
                 )
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
@@ -139,10 +139,10 @@ fun SettingsScreen(
                 SettingsDestination.Translation -> TranslationSettingsPage(
                     settings = state.translationSettings,
                     modelState = translationModelState,
-                    hyMt2ModelState = hyMt2ModelState,
+                    gemma4ModelState = gemma4ModelState,
                     onChanged = onTranslationSettingsChanged,
                     onDownloadModel = onDownloadTranslationModel,
-                    onDownloadHyMt2Model = onDownloadHyMt2Model,
+                    onDownloadGemma4Model = onDownloadGemma4Model,
                 )
                 SettingsDestination.Captions -> CaptionSettingsPage(
                     displayMode = state.displayMode,
@@ -173,7 +173,7 @@ private fun SettingsHome(
     modelState: ModelState,
     systemModelState: ModelState,
     translationModelState: ModelState,
-    hyMt2ModelState: ModelState,
+    gemma4ModelState: ModelState,
     onOpen: (SettingsDestination) -> Unit,
 ) {
     Column(
@@ -201,8 +201,8 @@ private fun SettingsHome(
                 title = "翻译",
                 summary = translationSummary(
                     state.translationSettings,
-                    if (state.translationSettings.engine == TranslationEngine.HyMt2) {
-                        hyMt2ModelState
+                    if (state.translationSettings.engine == TranslationEngine.Gemma4) {
+                        gemma4ModelState
                     } else {
                         translationModelState
                     },
@@ -283,7 +283,7 @@ private fun translationSummary(settings: TranslationSettings, state: ModelState)
         TranslationEngine.Google2 -> "Google"
         TranslationEngine.DeepL -> "DeepL"
         TranslationEngine.OpenAICompatible -> "LLM"
-        TranslationEngine.HyMt2 -> "HyMT2 · ${modelSummary(state)}"
+        TranslationEngine.Gemma4 -> "Gemma 4 · ${modelSummary(state)}"
     }
     return "$engine · ${languageName(settings.sourceLanguage)} → ${languageName(settings.targetLanguage)}"
 }

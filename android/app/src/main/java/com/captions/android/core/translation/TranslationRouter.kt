@@ -10,14 +10,14 @@ class TranslationRouter(
     private val google2: TextTranslator,
     private val deepL: TextTranslator,
     private val openAICompatible: TextTranslator,
-    private val hyMt2: TextTranslator,
+    private val gemma4: TextTranslator,
 ) : TextTranslator {
     override fun translate(input: TranslationInput, settings: TranslationSettings): String = when (settings.engine) {
         TranslationEngine.GoogleOnDevice -> local.translate(input, settings)
         TranslationEngine.Google2 -> google2.translate(input, settings)
         TranslationEngine.DeepL -> deepL.translate(input, settings)
         TranslationEngine.OpenAICompatible -> openAICompatible.translate(input, settings)
-        TranslationEngine.HyMt2 -> hyMt2.translate(input, settings)
+        TranslationEngine.Gemma4 -> gemma4.translate(input, settings)
     }
 
     override fun close() {
@@ -25,6 +25,6 @@ class TranslationRouter(
         google2.close()
         deepL.close()
         openAICompatible.close()
-        hyMt2.close()
+        gemma4.close()
     }
 }

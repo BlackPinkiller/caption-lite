@@ -32,10 +32,10 @@ import com.captions.android.ports.ModelState
 internal fun TranslationSettingsPage(
     settings: TranslationSettings,
     modelState: ModelState,
-    hyMt2ModelState: ModelState,
+    gemma4ModelState: ModelState,
     onChanged: (TranslationSettings) -> Unit,
     onDownloadModel: () -> Unit,
-    onDownloadHyMt2Model: () -> Unit,
+    onDownloadGemma4Model: () -> Unit,
 ) {
     var advancedOpen by rememberSaveable { mutableStateOf(false) }
     SettingsPage {
@@ -63,7 +63,7 @@ internal fun TranslationSettingsPage(
                     choices = listOf(
                         TranslationEngine.GoogleOnDevice to "Google 本地",
                         TranslationEngine.Google2 to "Google",
-                        TranslationEngine.HyMt2 to "HyMT2",
+                        TranslationEngine.Gemma4 to "Gemma 4",
                     ),
                     selected = settings.engine,
                     onSelected = { onChanged(settings.copy(engine = it)) },
@@ -109,10 +109,10 @@ internal fun TranslationSettingsPage(
                     modelState,
                     onDownloadModel,
                 )
-                TranslationEngine.HyMt2 -> TranslationModelStatus(
-                    hyMt2ModelState,
-                    onDownloadHyMt2Model,
-                    missingLabel = "HyMT2 · 约 440 MB",
+                TranslationEngine.Gemma4 -> TranslationModelStatus(
+                    gemma4ModelState,
+                    onDownloadGemma4Model,
+                    missingLabel = "Gemma 4 · 约 2.0 GB",
                 )
                 TranslationEngine.Google2 -> Unit
                 TranslationEngine.DeepL -> DeepLSettings(settings, onChanged)
@@ -258,5 +258,5 @@ private fun engineName(engine: TranslationEngine): String = when (engine) {
     TranslationEngine.Google2 -> "Google"
     TranslationEngine.DeepL -> "DeepL"
     TranslationEngine.OpenAICompatible -> "LLM"
-    TranslationEngine.HyMt2 -> "HyMT2"
+    TranslationEngine.Gemma4 -> "Gemma 4"
 }
