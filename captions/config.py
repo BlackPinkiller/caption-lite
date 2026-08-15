@@ -203,6 +203,7 @@ class SegmentationConfig:
     preview_min_chars: int = 4
     preview_interval_ms: int = 600
     preview_char_delta: int = 18
+    split_punctuation: bool = True
 
 
 @dataclass
@@ -550,6 +551,7 @@ def _normalize_config(config: AppConfig) -> None:
     segmentation.preview_char_delta = int(
         _clamp(segmentation.preview_char_delta, 1, 200)
     )
+    segmentation.split_punctuation = bool(segmentation.split_punctuation)
 
     subtitle = config.subtitle
     if subtitle.theme not in {*SUBTITLE_THEME_PRESETS, "custom"}:

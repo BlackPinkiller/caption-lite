@@ -7,27 +7,74 @@ import org.junit.Test
 
 class RecognitionSegmenterTest {
     @Test
-    fun `terminal punctuation requires a followup update`() {
-        var now = 1_000L
-        val segmenter = RecognitionSegmenter(nowMillis = { now })
+    fun `trailing punctuation commits immediately`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
 
-        val first = segmenter.update("Hello world.")
-        now = 1_560L
-        val second = segmenter.update("Hello world.")
+        val update = segmenter.update("Hello world.")
 
-        assertTrue(first.committed.isEmpty())
-        assertEquals("Hello world.", second.committed)
+        assertEquals(listOf("Hello world."), update.commits.map { it.text })
+        assertEquals("", update.active)
+        assertFalse(update.commits.first().forced)
     }
 
     @Test
-    fun `following text remains active after punctuation commit`() {
+    fun `mid text boundary commits and keeps the tail active`() {
         val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
-        segmenter.update("One.")
 
         val update = segmenter.update("One. Two")
 
-        assertEquals("One.", update.committed)
+        assertEquals(listOf("One."), update.commits.map { it.text })
         assertEquals("Two", update.active)
+    }
+
+    @Test
+    fun `multiple boundaries commit each sentence as its own cue`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+
+        val update = segmenter.update("One. Two. Three")
+
+        assertEquals(listOf("One.", "Two."), update.commits.map { it.text })
+        assertEquals("Three", update.active)
+    }
+
+    @Test
+    fun `short fragment below the floor stays active`() {
+        val segmenter = RecognitionSegmenter(minCommitChars = 4, nowMillis = { 1_000L })
+
+        val update = segmenter.update("ok.")
+
+        assertEquals(emptyList<SegmentCommit>(), update.commits)
+        assertEquals("ok.", update.active)
+    }
+
+    @Test
+    fun `abbreviation period is not a boundary`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+
+        val update = segmenter.update("Mr. Smith is here")
+
+        assertEquals(emptyList<SegmentCommit>(), update.commits)
+        assertEquals("Mr. Smith is here", update.active)
+    }
+
+    @Test
+    fun `abbreviation followed by a later boundary skips the initial`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+
+        val update = segmenter.update("Mr. Smith is here. Next")
+
+        assertEquals(listOf("Mr. Smith is here."), update.commits.map { it.text })
+        assertEquals("Next", update.active)
+    }
+
+    @Test
+    fun `punctuation disabled defers to silence and limits`() {
+        val segmenter = RecognitionSegmenter(splitPunctuation = false, nowMillis = { 1_000L })
+
+        val update = segmenter.update("Hello world. More")
+
+        assertEquals(emptyList<SegmentCommit>(), update.commits)
+        assertEquals("Hello world. More", update.active)
     }
 
     @Test
@@ -41,9 +88,9 @@ class RecognitionSegmenterTest {
 
         val update = segmenter.update("one two three four five six")
 
-        assertTrue(update.forced)
-        assertTrue(update.committed.isNotEmpty())
-        assertFalse(update.committed.endsWith(" f"))
+        assertTrue(update.commits.isNotEmpty())
+        assertTrue(update.commits.last().forced)
+        assertFalse(update.commits.last().text.endsWith(" f"))
     }
 
     @Test
@@ -58,9 +105,9 @@ class RecognitionSegmenterTest {
         val waiting = segmenter.update("one two three four five six")
         val committed = segmenter.update("one two three four five six seven.")
 
-        assertTrue(waiting.committed.isEmpty())
-        assertEquals("one two three four five six seven.", committed.committed)
-        assertFalse(committed.forced)
+        assertTrue(waiting.commits.isEmpty())
+        assertEquals(listOf("one two three four five six seven."), committed.commits.map { it.text })
+        assertFalse(committed.commits.first().forced)
     }
 
     @Test
@@ -97,7 +144,21 @@ class RecognitionSegmenterTest {
 
         val update = segmenter.update("one sentence is still being spoken very slowly")
 
-        assertEquals("one sentence is still being spoken very slowly", update.committed)
+        assertEquals(
+            listOf("one sentence is still being spoken very slowly"),
+            update.commits.map { it.text },
+        )
+        assertEquals("", update.active)
+    }
+
+    @Test
+    fun `flush commits the remaining active text`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        segmenter.update("one sentence")
+
+        val update = segmenter.flush()
+
+        assertEquals(listOf("one sentence"), update.commits.map { it.text })
         assertEquals("", update.active)
     }
 
@@ -113,7 +174,7 @@ class RecognitionSegmenterTest {
             "recognition continues while each phrase had fresh material and avoids repetition"
         segmenter.update(original)
         now = 11_000L
-        assertEquals(original, segmenter.update(original).committed)
+        assertEquals(original, segmenter.update(original).commits.single().text)
         now = 12_000L
 
         val revised = segmenter.update(
@@ -121,7 +182,7 @@ class RecognitionSegmenterTest {
                 "before the next idea",
         )
 
-        assertTrue(revised.committed.isEmpty())
+        assertTrue(revised.commits.isEmpty())
         assertEquals("before the next idea", revised.active)
     }
 
@@ -155,8 +216,8 @@ class RecognitionSegmenterTest {
 
         val update = segmenter.update("这是第一句。这是第二句")
 
-        assertEquals("这是第一句。", update.committed)
+        assertEquals(listOf("这是第一句。"), update.commits.map { it.text })
         assertEquals("这是第二句", update.active)
-        assertFalse(update.forced)
+        assertFalse(update.commits.first().forced)
     }
 }

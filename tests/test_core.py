@@ -97,28 +97,57 @@ from captions.ui.settings_dialog import (
 
 
 class SegmenterTests(unittest.TestCase):
-    def test_terminal_punctuation_requires_a_followup_update(self) -> None:
+    def test_trailing_punctuation_commits_immediately(self) -> None:
         segmenter = Segmenter()
-        first = segmenter.update("Hello world.", now=1)
-        second = segmenter.update("Hello world.", now=1.56)
-        self.assertFalse(first.committed)
-        self.assertEqual(second.committed, "Hello world.")
+        update = segmenter.update("Hello world.", now=1)
+        self.assertEqual(update.active, "")
+        self.assertEqual([c.text for c in update.commits], ["Hello world."])
+        self.assertFalse(update.commits[0].forced)
 
-    def test_following_text_is_retained(self) -> None:
+    def test_mid_text_boundary_commits_and_keeps_tail_active(self) -> None:
         segmenter = Segmenter()
-        segmenter.update("One.", now=1)
-        update = segmenter.update("One. Two", now=1.56)
-        self.assertEqual(update.committed, "One.")
-        self.assertEqual(update.active, "Two")
+        update = segmenter.update("Hello world. How are you", now=1)
+        self.assertEqual([c.text for c in update.commits], ["Hello world."])
+        self.assertEqual(update.active, "How are you")
+
+    def test_multiple_boundaries_commit_each_sentence_as_own_cue(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("One. Two. Three", now=1)
+        self.assertEqual([c.text for c in update.commits], ["One.", "Two."])
+        self.assertEqual(update.active, "Three")
+
+    def test_short_fragment_below_floor_stays_active(self) -> None:
+        segmenter = Segmenter(min_commit_chars=4)
+        update = segmenter.update("ok.", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "ok.")
+
+    def test_abbreviation_period_is_not_a_boundary(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("Mr. Smith is here", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "Mr. Smith is here")
+
+    def test_abbreviation_with_later_boundary_skips_the_initial(self) -> None:
+        segmenter = Segmenter()
+        update = segmenter.update("Mr. Smith is here. Next", now=1)
+        self.assertEqual([c.text for c in update.commits], ["Mr. Smith is here."])
+        self.assertEqual(update.active, "Next")
+
+    def test_punctuation_disabled_defers_to_silence_and_limits(self) -> None:
+        segmenter = Segmenter(split_punctuation=False)
+        update = segmenter.update("Hello world. More", now=1)
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "Hello world. More")
 
     def test_long_text_is_forced_at_a_word_boundary(self) -> None:
         segmenter = Segmenter(
             max_chars=20, split_lookback_chars=4, split_lookahead_chars=5
         )
         update = segmenter.update("one two three four five six", now=1)
-        self.assertTrue(update.forced)
-        self.assertTrue(update.committed)
-        self.assertFalse(update.committed.endswith(" f"))
+        self.assertTrue(update.commits)
+        self.assertTrue(update.commits[-1].forced)
+        self.assertFalse(update.commits[-1].text.endswith(" f"))
 
     def test_repeated_text_never_moves_the_consumed_position_backwards(self) -> None:
         segmenter = Segmenter(
@@ -142,9 +171,12 @@ class SegmenterTests(unittest.TestCase):
         waiting = segmenter.update("one two three four five six", now=1)
         committed = segmenter.update("one two three four five six seven.", now=2)
 
-        self.assertFalse(waiting.committed)
-        self.assertEqual(committed.committed, "one two three four five six seven.")
-        self.assertFalse(committed.forced)
+        self.assertEqual(waiting.commits, ())
+        self.assertEqual(
+            [c.text for c in committed.commits],
+            ["one two three four five six seven."],
+        )
+        self.assertFalse(committed.commits[0].forced)
 
     def test_time_limit_commits_the_whole_active_text(self) -> None:
         segmenter = Segmenter(max_chars=240, max_seconds=10)
@@ -154,8 +186,16 @@ class SegmenterTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            update.committed, "one sentence is still being spoken very slowly"
+            [c.text for c in update.commits],
+            ["one sentence is still being spoken very slowly"],
         )
+        self.assertEqual(update.active, "")
+
+    def test_flush_commits_the_remaining_active_text(self) -> None:
+        segmenter = Segmenter()
+        segmenter.update("one sentence", now=1)
+        update = segmenter.flush()
+        self.assertEqual([c.text for c in update.commits], ["one sentence"])
         self.assertEqual(update.active, "")
 
 
@@ -894,7 +934,7 @@ class CaptureLifecycleTests(unittest.TestCase):
             capture_paused=False,
             model_loaded=True,
             segmenter=SimpleNamespace(
-                flush=lambda forced=True: SimpleNamespace(committed="")
+                flush=lambda forced=True: SimpleNamespace(commits=())
             ),
             overlay=SimpleNamespace(
                 set_capturing=lambda value: events.append(f"overlay:{value}")

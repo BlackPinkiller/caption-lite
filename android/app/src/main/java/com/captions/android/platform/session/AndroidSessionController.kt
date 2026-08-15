@@ -94,12 +94,12 @@ class AndroidSessionController(
         var active = segmenter.active
         if (update.text.isNotEmpty()) {
             val segmented = segmenter.update(update.text)
-            if (segmented.committed.isNotBlank()) commitSource(segmented.committed)
+            segmented.commits.forEach { commitSource(it.text) }
             active = segmented.active
         }
         if (update.endpoint) {
             val flushed = segmenter.flush()
-            if (flushed.committed.isNotBlank()) commitSource(flushed.committed)
+            flushed.commits.forEach { commitSource(it.text) }
         } else if (active.isNotBlank()) {
             publishActive(active)
         }
@@ -136,7 +136,8 @@ class AndroidSessionController(
     private fun commitActiveCue() {
         val segmented = segmenter.flush(forced = true)
         val current = viewModel.state.value.entries.lastOrNull()?.takeIf { it.current }
-        val source = segmented.committed.ifBlank { current?.source.orEmpty() }
+        val source = segmented.commits.firstOrNull()?.text?.takeIf { it.isNotBlank() }
+            ?: current?.source.orEmpty()
         if (source.isNotBlank()) commitSource(source)
     }
 

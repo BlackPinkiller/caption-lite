@@ -13,6 +13,7 @@ from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
 from captions.ports.audio_source import AudioCaptureKind, AudioSource
 from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, RecognitionBackend
+from captions.segmenter import should_commit_endpoint
 
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
@@ -32,18 +33,6 @@ def capture_status_text(capture_kind: AudioCaptureKind, state: str) -> str:
         "connecting": "正在连接系统播放设备…",
         "reconnecting": "播放设备已变化，正在重连",
     }[state]
-
-
-def should_commit_endpoint(
-    text: str,
-    *,
-    vad_endpoint: bool,
-    asr_endpoint: bool,
-    silence_min_chars: int,
-) -> bool:
-    if asr_endpoint:
-        return True
-    return vad_endpoint and len(text.strip()) >= max(1, silence_min_chars)
 
 
 class AutoStandbyDetector:
