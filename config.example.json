@@ -51,7 +51,7 @@
     "preview_min_chars": 4,
     "preview_interval_ms": 600,
     "preview_char_delta": 18,
-    "split_punctuation": true
+    "punctuation_mode": "sentence"
   },
   "subtitle": {
     "theme": "clear",

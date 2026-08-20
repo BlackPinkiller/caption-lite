@@ -106,7 +106,7 @@ class CaptionApplication(QObject):
             max_seconds=self.config.segmentation.max_seconds,
             split_lookback_chars=self.config.segmentation.split_lookback_chars,
             split_lookahead_chars=self.config.segmentation.split_lookahead_chars,
-            split_punctuation=self.config.segmentation.split_punctuation,
+            punctuation_mode=self.config.segmentation.punctuation_mode,
             min_commit_chars=self.config.asr.silence_min_chars,
         )
         self.translation_session = TranslationSession(self, self.diagnostics)
@@ -670,7 +670,7 @@ class CaptionApplication(QObject):
         self.segmenter.split_lookahead_chars = (
             config.segmentation.split_lookahead_chars
         )
-        self.segmenter.split_punctuation = config.segmentation.split_punctuation
+        self.segmenter.punctuation_mode = config.segmentation.punctuation_mode
         self.segmenter.min_commit_chars = config.asr.silence_min_chars
         self.overlay.config = config
         self.overlay.canvas.set_style(config.subtitle)

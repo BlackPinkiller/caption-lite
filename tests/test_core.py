@@ -144,10 +144,61 @@ class SegmenterTests(unittest.TestCase):
         self.assertEqual(update.active, "Next")
 
     def test_punctuation_disabled_defers_to_silence_and_limits(self) -> None:
-        segmenter = Segmenter(split_punctuation=False)
+        segmenter = Segmenter(punctuation_mode="off")
         update = segmenter.update("Hello world. More", now=1)
         self.assertEqual(update.commits, ())
         self.assertEqual(update.active, "Hello world. More")
+
+    def test_sentence_punctuation_does_not_split_at_a_comma(self) -> None:
+        segmenter = Segmenter(punctuation_mode="sentence")
+
+        update = segmenter.update("Hello there, how are you", now=1)
+
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "Hello there, how are you")
+
+    def test_all_punctuation_confirms_a_weak_boundary_with_following_text(self) -> None:
+        segmenter = Segmenter(punctuation_mode="all")
+
+        waiting = segmenter.update("Hello there,", now=1)
+        confirmed = segmenter.update("Hello there, how are you", now=2)
+
+        self.assertEqual(waiting.commits, ())
+        self.assertEqual(waiting.active, "Hello there,")
+        self.assertEqual([commit.text for commit in confirmed.commits], ["Hello there,"])
+        self.assertEqual(confirmed.active, "how are you")
+
+    def test_all_punctuation_splits_multiple_confirmed_phrases(self) -> None:
+        segmenter = Segmenter(punctuation_mode="all")
+
+        segmenter.update("第一部分，第二部分；第三部分", now=1)
+        first = segmenter.update("第一部分，第二部分；第三部分继续", now=2)
+        second = segmenter.update("第一部分，第二部分；第三部分继续说", now=3)
+
+        self.assertEqual(
+            [commit.text for commit in first.commits],
+            ["第一部分，"],
+        )
+        self.assertEqual(
+            [commit.text for commit in second.commits],
+            ["第二部分；"],
+        )
+        self.assertEqual(second.active, "第三部分继续说")
+
+    def test_all_punctuation_keeps_numeric_separators(self) -> None:
+        segmenter = Segmenter(punctuation_mode="all")
+
+        segmenter.update("The total was 100,000 dollars, which was enough", now=1)
+        update = segmenter.update(
+            "The total was 100,000 dollars, which was enough today",
+            now=2,
+        )
+
+        self.assertEqual(
+            [commit.text for commit in update.commits],
+            ["The total was 100,000 dollars,"],
+        )
+        self.assertEqual(update.active, "which was enough today")
 
     def test_long_text_is_forced_at_a_word_boundary(self) -> None:
         segmenter = Segmenter(
@@ -905,6 +956,65 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_all_punctuation_keeps_source_translation_and_history_on_one_cue(self) -> None:
+        config = AppConfig()
+        config.segmentation.punctuation_mode = "all"
+        records: list[HistoryRecord] = []
+        translation_requests: list[tuple[str, int]] = []
+        preview_requests: list[tuple[str, int]] = []
+        canvas = SimpleNamespace(cue_id=0, source="", translation="")
+
+        def set_cue(cue_id: int, source: str, translation: str) -> None:
+            canvas.cue_id = cue_id
+            canvas.source = source
+            canvas.translation = translation
+
+        canvas.set_cue = set_cue
+        canvas.set_content = lambda **values: None
+
+        def commit_live(record: HistoryRecord) -> int:
+            records.append(record)
+            return len(records) - 1
+
+        app = SimpleNamespace(
+            closing=False,
+            config=config,
+            segmenter=Segmenter(punctuation_mode="all"),
+            active_cue_id=1,
+            history=SimpleNamespace(
+                records=records,
+                commit_live=commit_live,
+                set_live=lambda **values: None,
+            ),
+            translation_session=SimpleNamespace(
+                request_commit=lambda source, history, settings, **values: (
+                    translation_requests.append((source, values["cue_id"]))
+                ),
+                schedule_preview=lambda source, history, settings, segmentation, cue_id: (
+                    preview_requests.append((source, cue_id))
+                ),
+            ),
+            overlay=SimpleNamespace(canvas=canvas),
+            _restart_clear_timer=lambda: None,
+        )
+        app._display_source = lambda cue_id, source: CaptionApplication._display_source(
+            app, cue_id, source
+        )
+        app._commit = lambda source, forced: CaptionApplication._commit(
+            app, source, forced
+        )
+
+        CaptionApplication._asr_partial(app, "Hello there,", 1)
+        CaptionApplication._asr_partial(app, "Hello there, how are you", 2)
+
+        self.assertEqual([record.source for record in records], ["Hello there,"])
+        self.assertEqual(translation_requests, [("Hello there,", 1)])
+        self.assertEqual(
+            preview_requests,
+            [("Hello there,", 1), ("how are you", 2)],
+        )
+        self.assertEqual((canvas.cue_id, canvas.source), (2, "how are you"))
+
     def test_failed_download_keeps_a_retryable_failure_terminal_state(self) -> None:
         config = AppConfig()
         failures: list[str] = []
@@ -1927,6 +2037,22 @@ class SettingsDialogTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.qt_app = QApplication.instance() or QApplication([])
 
+    def test_punctuation_mode_exposes_three_clear_levels(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        self.assertEqual(
+            [
+                dialog.punctuation_mode.itemData(index)
+                for index in range(dialog.punctuation_mode.count())
+            ],
+            ["off", "sentence", "all"],
+        )
+        self.assertEqual(dialog.punctuation_mode.currentData(), "sentence")
+        dialog._select(dialog.punctuation_mode, "all")
+        self.assertEqual(dialog.values().segmentation.punctuation_mode, "all")
+        self.assertIn("始终分句", dialog.punctuation_mode.toolTip())
+        dialog.close()
+
     def test_model_control_switches_between_download_and_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = AppConfig()
@@ -2826,6 +2952,34 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.asr.silence_endpoint_ms, 1500)
         self.assertEqual(loaded.asr.silence_min_chars, 1)
 
+    def test_legacy_punctuation_toggle_migrates_to_the_matching_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"segmentation":{"split_punctuation":false}}',
+                encoding="utf-8",
+            )
+            disabled, _ = load_config(path)
+            path.write_text(
+                '{"segmentation":{"split_punctuation":true}}',
+                encoding="utf-8",
+            )
+            sentence, _ = load_config(path)
+
+        self.assertEqual(disabled.segmentation.punctuation_mode, "off")
+        self.assertEqual(sentence.segmentation.punctuation_mode, "sentence")
+
+    def test_invalid_punctuation_mode_uses_the_sentence_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                '{"segmentation":{"punctuation_mode":"unknown"}}',
+                encoding="utf-8",
+            )
+            loaded, _ = load_config(path)
+
+        self.assertEqual(loaded.segmentation.punctuation_mode, "sentence")
+
     def test_outline_width_is_capped_at_one_pixel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -2920,6 +3074,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.asr.silence_min_chars, 4)
         self.assertEqual(config.segmentation.preview_min_chars, 4)
         self.assertEqual(config.segmentation.preview_interval_ms, 600)
+        self.assertEqual(config.segmentation.punctuation_mode, "sentence")
         self.assertEqual(config.translation.backend, "llama")
         self.assertEqual(config.translation.source_lang, "EN")
         self.assertEqual(config.translation.target_lang, "ZH-HANS")
@@ -2940,6 +3095,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.asr.silence_min_chars, 4)
         self.assertEqual(loaded.segmentation.preview_min_chars, 4)
         self.assertEqual(loaded.segmentation.preview_interval_ms, 600)
+        self.assertEqual(loaded.segmentation.punctuation_mode, "sentence")
         self.assertEqual(loaded.translation.deepl_api_plan, "free")
         self.assertTrue(loaded.translation.enabled)
         self.assertFalse(loaded.debug.enabled)
