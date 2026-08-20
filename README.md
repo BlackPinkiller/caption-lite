@@ -37,6 +37,12 @@ sherpa-onnx 运行 Nemotron 560 ms 英文流式识别，并可选 Nemotron 3.5 A
 .\tools\download-nemotron-model.ps1 -Multilingual
 ```
 
+需要比较更长识别上下文时，可选择英文 Nemotron 1120 ms，或执行：
+
+```powershell
+.\tools\download-nemotron-model.ps1 -LongContext
+```
+
 Nemotron 下载包约 442–453 MiB，中文 Zipformer 约 126 MiB，只需下载一次，保存在
 `models` 目录。模型缺失时，应用会询问是否下载；
 托盘模型项和设置窗口的模型状态项都会变成下载按钮。下载百分比、解压和模型加载状态会同时

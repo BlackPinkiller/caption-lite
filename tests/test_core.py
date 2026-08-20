@@ -47,6 +47,7 @@ from captions.audio_asr import (
 from captions.config import (
     AppConfig,
     CHINESE_MODEL_NAME,
+    ENGLISH_1120_MODEL_NAME,
     LlmProviderConfig,
     MULTILINGUAL_MODEL_NAME,
     NEMOTRON_MULTILINGUAL_LANGUAGES,
@@ -2167,6 +2168,17 @@ class SettingsDialogTests(unittest.TestCase):
         )
         self.assertEqual(dialog.model_dir.text(), default_model_dir("multilingual"))
         self.assertIn(MULTILINGUAL_MODEL_NAME, dialog.model_dir.text())
+        dialog.close()
+
+    def test_english_1120_selection_uses_its_default_directory(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+        dialog.model_variant.setCurrentIndex(
+            dialog.model_variant.findData("english_1120")
+        )
+
+        self.assertEqual(dialog.asr_language.currentData(), "en")
+        self.assertEqual(dialog.model_dir.text(), default_model_dir("english_1120"))
+        self.assertIn(ENGLISH_1120_MODEL_NAME, dialog.model_dir.text())
         dialog.close()
 
     def test_advanced_asr_performance_controls_round_trip(self) -> None:

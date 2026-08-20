@@ -1,15 +1,31 @@
-param([switch]$Multilingual)
+param(
+    [switch]$Multilingual,
+    [switch]$LongContext
+)
 
 $ErrorActionPreference = 'Stop'
+if ($Multilingual -and $LongContext) {
+    throw 'Choose either -Multilingual or -LongContext'
+}
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $modelName = if ($Multilingual) {
     'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11'
+} elseif ($LongContext) {
+    'sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25'
 } else {
     'sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25'
 }
-$expectedBytes = if ($Multilingual) { 475271763 } else { 463945051 }
+$expectedBytes = if ($Multilingual) {
+    475271763
+} elseif ($LongContext) {
+    463945058
+} else {
+    463945051
+}
 $expectedSha256 = if ($Multilingual) {
     'c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a'
+} elseif ($LongContext) {
+    '840c48deed02d4a5975716e7b12dc0a8b1ba620776c6366f7e5677d8907edd73'
 } else {
     '78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358'
 }

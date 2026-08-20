@@ -20,12 +20,19 @@ from captions.ports.secret_store import SecretStore, SecretStoreError
 
 
 MODEL_NAME = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+ENGLISH_1120_MODEL_NAME = (
+    "sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25"
+)
 MULTILINGUAL_MODEL_NAME = (
     "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
 )
 MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     f"{MODEL_NAME}.tar.bz2"
+)
+ENGLISH_1120_MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    f"{ENGLISH_1120_MODEL_NAME}.tar.bz2"
 )
 MULTILINGUAL_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
@@ -97,6 +104,18 @@ MODEL_CATALOG = {
         MODEL_URL,
         463_945_051,
         "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "joiner.int8.onnx",
+        supported_languages=("en",),
+        default_language="en",
+    ),
+    "english_1120": ModelPreset(
+        "Nemotron 1120 ms（英文）",
+        ENGLISH_1120_MODEL_NAME,
+        ENGLISH_1120_MODEL_URL,
+        463_945_058,
+        "840c48deed02d4a5975716e7b12dc0a8b1ba620776c6366f7e5677d8907edd73",
         "encoder.int8.onnx",
         "decoder.int8.onnx",
         "joiner.int8.onnx",
