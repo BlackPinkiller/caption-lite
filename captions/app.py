@@ -33,6 +33,13 @@ from captions.ui.overlay import OverlayWindow
 from captions.ui.settings_dialog import SettingsDialog
 
 
+def compact_model_status(text: str, maximum: int = 22) -> str:
+    compact = text.split(" · ", 1)[0]
+    if len(compact) > maximum:
+        compact = compact[: maximum - 1] + "…"
+    return compact
+
+
 class CaptionApplication(QObject):
     MODES = ("bilingual", "source", "translation")
 
@@ -178,6 +185,7 @@ class CaptionApplication(QObject):
         tray = QSystemTrayIcon(self.app_icon, self)
         tray.setToolTip("实时字幕")
         menu = QMenu()
+        menu.setToolTipsVisible(True)
         self.status_action = QAction("状态：正在启动", menu)
         self.status_action.setEnabled(False)
         menu.addAction(self.status_action)
@@ -738,7 +746,11 @@ class CaptionApplication(QObject):
     def _model_download_progress(self, downloaded: int, total: int) -> None:
         if total > 0:
             percent = max(0, min(100, round(downloaded * 100 / total)))
-            self._set_model_status(f"下载 {percent}%")
+            downloaded_mb = downloaded / (1024 * 1024)
+            total_mb = total / (1024 * 1024)
+            self._set_model_status(
+                f"下载 {percent}% · {downloaded_mb:.0f}/{total_mb:.0f} MB"
+            )
         else:
             megabytes = downloaded / (1024 * 1024)
             self._set_model_status(f"已下载 {megabytes:.0f} MB")
@@ -789,6 +801,8 @@ class CaptionApplication(QObject):
         self.model_text = "未安装"
         if hasattr(self, "model_action"):
             self.model_action.setText("下载语音识别模型…")
+            self.model_action.setToolTip("下载语音识别模型")
+            self.model_action.setStatusTip("下载语音识别模型")
             self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
             self.settings.set_model_status("未安装", downloadable=True)
@@ -797,7 +811,10 @@ class CaptionApplication(QObject):
     def _set_model_status(self, text: str) -> None:
         self.model_text = text
         if hasattr(self, "model_action"):
-            self.model_action.setText(f"模型：{text}")
+            full_text = f"模型：{text}"
+            self.model_action.setText(f"模型：{compact_model_status(text)}")
+            self.model_action.setToolTip(full_text)
+            self.model_action.setStatusTip(full_text)
             self.model_action.setEnabled(False)
         if hasattr(self, "settings"):
             self.settings.set_model_status(text)

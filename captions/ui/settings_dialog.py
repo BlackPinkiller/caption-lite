@@ -1018,9 +1018,15 @@ class SettingsDialog(QDialog):
         self.translation_advanced.setEnabled(enabled)
 
     def set_model_status(self, text: str, downloadable: bool = False) -> None:
-        self.model_status.setText(
-            "下载语音识别模型…" if downloadable else f"模型：{text}"
-        )
+        active = text.startswith(("下载 ", "已下载 ", "正在连接", "正在解压"))
+        if downloadable:
+            label = "下载语音识别模型…"
+        elif active:
+            label = text
+        else:
+            label = f"模型：{text}"
+        self.model_status.setText(label)
+        self.model_status.setToolTip(label)
         self.model_status.setEnabled(downloadable)
 
     def set_translation_test_status(

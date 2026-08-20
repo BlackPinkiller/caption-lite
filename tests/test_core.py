@@ -33,7 +33,7 @@ from captions.adapters.sherpa_onnx_recognition import (
     SherpaOnnxRecognitionBackend,
     SherpaStreamingRecognition,
 )
-from captions.app import CaptionApplication, TranslationJob
+from captions.app import CaptionApplication, TranslationJob, compact_model_status
 from captions.audio_asr import (
     CAPTURE_BLOCK_SIZE,
     CAPTURE_BUFFER_SIZE,
@@ -897,6 +897,48 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_model_download_progress_updates_compact_menu_and_full_tooltips(self) -> None:
+        action_state: dict[str, object] = {}
+        settings_status: list[str] = []
+        tray_tooltips: list[str] = []
+        app = SimpleNamespace(
+            status_text="空闲",
+            device_text="默认播放设备",
+            model_text="未安装",
+            model_action=SimpleNamespace(
+                setText=lambda text: action_state.__setitem__("text", text),
+                setToolTip=lambda text: action_state.__setitem__("tooltip", text),
+                setStatusTip=lambda text: action_state.__setitem__("status_tip", text),
+                setEnabled=lambda value: action_state.__setitem__("enabled", value),
+            ),
+            settings=SimpleNamespace(
+                set_model_status=lambda text: settings_status.append(text)
+            ),
+            tray=SimpleNamespace(setToolTip=lambda text: tray_tooltips.append(text)),
+        )
+        app._refresh_tray_status = lambda: CaptionApplication._refresh_tray_status(app)
+        app._set_model_status = lambda text: CaptionApplication._set_model_status(app, text)
+
+        CaptionApplication._model_download_progress(
+            app,
+            176 * 1024 * 1024,
+            464 * 1024 * 1024,
+        )
+
+        self.assertEqual(action_state["text"], "模型：下载 38%")
+        self.assertEqual(action_state["tooltip"], "模型：下载 38% · 176/464 MB")
+        self.assertEqual(action_state["status_tip"], action_state["tooltip"])
+        self.assertFalse(action_state["enabled"])
+        self.assertEqual(settings_status, ["下载 38% · 176/464 MB"])
+        self.assertIn("模型：下载 38% · 176/464 MB", tray_tooltips[-1])
+
+        CaptionApplication._model_download_stage(app, "正在解压模型")
+
+        self.assertEqual(action_state["text"], "模型：正在解压")
+        self.assertEqual(action_state["tooltip"], "模型：正在解压")
+        self.assertEqual(settings_status[-1], "正在解压")
+        self.assertIn("模型：正在解压", tray_tooltips[-1])
+
     def test_capture_uses_low_latency_reads_with_a_larger_device_buffer(self) -> None:
         self.assertEqual(CAPTURE_BLOCK_SIZE, VAD_WINDOW_SIZE * 3)
         self.assertAlmostEqual(CAPTURE_BLOCK_SIZE / 16000, 0.096)
@@ -1812,6 +1854,23 @@ class SettingsDialogTests(unittest.TestCase):
             self.assertFalse(dialog.model_status.isEnabled())
             self.assertIn("已就绪", dialog.model_status.text())
             dialog.close()
+
+    def test_model_download_reuses_the_button_for_full_progress(self) -> None:
+        dialog = SettingsDialog(AppConfig())
+
+        dialog.set_model_status("下载 38% · 176/464 MB")
+
+        self.assertEqual(dialog.model_status.text(), "下载 38% · 176/464 MB")
+        self.assertEqual(dialog.model_status.toolTip(), dialog.model_status.text())
+        self.assertFalse(dialog.model_status.isEnabled())
+        self.assertEqual(
+            compact_model_status("下载 38% · 176/464 MB"),
+            "下载 38%",
+        )
+        dialog.set_model_status("正在解压")
+        self.assertEqual(dialog.model_status.text(), "正在解压")
+        self.assertEqual(dialog.model_status.toolTip(), "正在解压")
+        dialog.close()
 
     def test_settings_are_separated_into_clear_sections(self) -> None:
         dialog = SettingsDialog(AppConfig())
