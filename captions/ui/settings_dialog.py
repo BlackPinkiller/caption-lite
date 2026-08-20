@@ -54,6 +54,7 @@ from captions.config import (
     clone_config,
     default_model_dir,
     model_is_complete,
+    supports_high_precision,
     subtitle_custom_style,
     subtitle_style_values,
 )
@@ -452,6 +453,11 @@ class SettingsDialog(QDialog):
         for key, preset in MODEL_CATALOG.items():
             self.model_variant.addItem(preset.label, key)
         form.addRow("识别模型", self.model_variant)
+        self.asr_precision = WheelSafeComboBox()
+        self.asr_precision.addItem("轻量（默认）", "int8")
+        self.asr_precision.addItem("高精度（NVIDIA GPU）", "fp32")
+        self.asr_precision_label = QLabel("识别精度")
+        form.addRow(self.asr_precision_label, self.asr_precision)
         self.model_dir = QLineEdit()
         browse = QPushButton("浏览…")
         browse.clicked.connect(self._browse_model)
@@ -469,6 +475,9 @@ class SettingsDialog(QDialog):
         self._populate_asr_languages("english", "en")
         form.addRow("识别语言", self.asr_language)
         self.model_variant.currentIndexChanged.connect(self._model_variant_changed)
+        self.asr_precision.currentIndexChanged.connect(
+            self._recognition_precision_changed
+        )
         self.asr_language.currentIndexChanged.connect(
             self._recognition_language_changed
         )
@@ -492,6 +501,7 @@ class SettingsDialog(QDialog):
         advanced = ExpandableSection("高级识别设置")
         self.recognition_advanced = advanced
         model_files_group = QGroupBox("模型文件")
+        self.model_files_group = model_files_group
         model_files_form = QFormLayout(model_files_group)
         model_files_form.addRow("模型目录", row)
         advanced.addWidget(model_files_group)
@@ -947,6 +957,7 @@ class SettingsDialog(QDialog):
         self.config = clone_config(config)
         self._draft_custom_style = subtitle_custom_style(config.subtitle)
         self._select(self.model_variant, config.asr.model_variant)
+        self._select(self.asr_precision, config.asr.precision)
         self.model_dir.setText(config.asr.model_dir)
         self._populate_asr_languages(
             config.asr.model_variant,
@@ -1018,9 +1029,15 @@ class SettingsDialog(QDialog):
         self.translation_advanced.setEnabled(enabled)
 
     def set_model_status(self, text: str, downloadable: bool = False) -> None:
-        active = text.startswith(("下载 ", "已下载 ", "正在连接", "正在解压"))
+        active = text.startswith(
+            ("下载 ", "已下载 ", "正在连接", "正在解压", "正在准备", "正在安装")
+        )
         if downloadable:
-            label = "下载语音识别模型…"
+            label = (
+                "下载高精度识别组件…"
+                if self.asr_precision.currentData() == "fp32"
+                else "下载语音识别模型…"
+            )
         elif active:
             label = text
         else:
@@ -1047,6 +1064,10 @@ class SettingsDialog(QDialog):
         if not hasattr(self, "model_status"):
             return
         config = clone_config(self.config)
+        selected_variant = self.model_variant.currentData()
+        if selected_variant != config.asr.model_variant:
+            apply_model_preset(config.asr, selected_variant)
+        config.asr.precision = self.asr_precision.currentData()
         config.asr.model_dir = self.model_dir.text().strip()
         if model_is_complete(config):
             self.set_model_status("已就绪")
@@ -1066,6 +1087,7 @@ class SettingsDialog(QDialog):
             apply_model_preset(config.asr, selected_variant)
         else:
             config.asr.model_variant = selected_variant
+        config.asr.precision = self.asr_precision.currentData()
         config.asr.model_dir = self.model_dir.text().strip()
         config.asr.language = self.asr_language.currentData()
         config.asr.auto_standby_seconds = self.auto_standby.currentData()
@@ -1182,7 +1204,20 @@ class SettingsDialog(QDialog):
         if not self._loading:
             self.model_dir.setText(default_model_dir(model_variant))
             self._sync_translation_source_from_recognition()
+        self._update_precision_controls()
         self._refresh_model_path_status()
+
+    def _recognition_precision_changed(self, *args) -> None:
+        self._update_precision_controls()
+        self._refresh_model_path_status()
+
+    def _update_precision_controls(self) -> None:
+        compatible = supports_high_precision(self.model_variant.currentData())
+        self.asr_precision_label.setVisible(compatible)
+        self.asr_precision.setVisible(compatible)
+        if not compatible and self.asr_precision.currentData() != "int8":
+            self._select(self.asr_precision, "int8")
+        self.model_files_group.setVisible(self.asr_precision.currentData() != "fp32")
 
     def _update_model_controls(self) -> None:
         self.asr_language.setEnabled(self.asr_language.count() > 1)

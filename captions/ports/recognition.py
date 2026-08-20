@@ -23,6 +23,9 @@ class StreamingRecognition(Protocol):
     def accept(self, samples: np.ndarray) -> RecognitionUpdate:
         ...
 
+    def finalize(self) -> RecognitionUpdate:
+        ...
+
 
 class RecognitionBackend(Protocol):
     """Create streaming ASR and VAD instances for the selected model."""

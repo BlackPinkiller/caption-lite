@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from captions.audio_asr import AudioAsrWorker
 from captions.config import AppConfig
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
+from captions.high_precision_runtime import HighPrecisionInstallWorker
 from captions.model_download import ModelDownloadWorker
 
 
@@ -99,7 +100,7 @@ class ModelDownloadSession(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.thread: QThread | None = None
-        self.worker: ModelDownloadWorker | None = None
+        self.worker: ModelDownloadWorker | HighPrecisionInstallWorker | None = None
 
     @property
     def running(self) -> bool:
@@ -117,7 +118,6 @@ class ModelDownloadSession(QObject):
     ) -> bool:
         if self.running:
             return False
-        thread = QThread(self)
         worker = ModelDownloadWorker(
             destination,
             model_name=model_name,
@@ -126,6 +126,18 @@ class ModelDownloadSession(QObject):
             expected_sha256=expected_sha256,
             required_files=required_files,
         )
+        return self._start_worker(worker)
+
+    def start_high_precision(self, destination: Path) -> bool:
+        if self.running:
+            return False
+        return self._start_worker(HighPrecisionInstallWorker(destination))
+
+    def _start_worker(
+        self,
+        worker: ModelDownloadWorker | HighPrecisionInstallWorker,
+    ) -> bool:
+        thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self.progress.emit)

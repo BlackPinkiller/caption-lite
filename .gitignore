@@ -4,6 +4,7 @@
 /dist/
 /.vs/
 /.vscode/
+/.opencode/
 /out/
 /*.user
 *.pdb

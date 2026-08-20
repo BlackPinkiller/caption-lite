@@ -23,6 +23,7 @@ from captions.config import (
     save_config,
 )
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
+from captions.high_precision_runtime import high_precision_runtime_dir
 from captions.platforms.global_shortcut import create_global_shortcut
 from captions.segmenter import Segmenter
 from captions.task_sessions import CaptureSession, ModelDownloadSession
@@ -569,7 +570,8 @@ class CaptionApplication(QObject):
             getattr(config.asr, name) != getattr(self.config.asr, name)
             for name in (
                 "model_variant", "model_dir", "encoder", "decoder", "joiner",
-                "tokens", "language", "num_threads", "silence_endpoint_ms",
+                "tokens", "precision", "language", "num_threads",
+                "silence_endpoint_ms",
             )
         )
         if had_asr_thread and recognizer_changed:
@@ -680,12 +682,18 @@ class CaptionApplication(QObject):
         prompt = QMessageBox(self.overlay)
         prompt.setWindowTitle("需要语音模型")
         prompt.setIcon(QMessageBox.Icon.Question)
-        preset = model_preset(self.config.asr.model_variant)
-        prompt.setText(f"未检测到 {preset.label} 语音识别模型。")
-        model_megabytes = round(preset.size / (1024 * 1024))
-        prompt.setInformativeText(
-            f"模型约 {model_megabytes} MB，只需下载一次。是否现在下载？"
-        )
+        if self.config.asr.precision == "fp32":
+            prompt.setText("未检测到高精度识别组件。")
+            prompt.setInformativeText(
+                "组件约 5.5 GB，只需下载一次。是否现在下载？"
+            )
+        else:
+            preset = model_preset(self.config.asr.model_variant)
+            prompt.setText(f"未检测到 {preset.label} 语音识别模型。")
+            model_megabytes = round(preset.size / (1024 * 1024))
+            prompt.setInformativeText(
+                f"模型约 {model_megabytes} MB，只需下载一次。是否现在下载？"
+            )
         prompt.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
@@ -710,21 +718,24 @@ class CaptionApplication(QObject):
         self.download_succeeded = False
         self._set_status("正在下载模型")
         self._set_model_status("正在连接")
-        model_name, model_url = model_download_spec(self.config)
-        expected_size, expected_sha256 = model_download_integrity(self.config)
-        self.download_session.start(
-            resolve_model_dir(self.config),
-            model_name=model_name,
-            model_url=model_url,
-            expected_size=expected_size,
-            expected_sha256=expected_sha256,
-            required_files=(
-                self.config.asr.encoder,
-                self.config.asr.decoder,
-                self.config.asr.joiner,
-                self.config.asr.tokens,
-            ),
-        )
+        if self.config.asr.precision == "fp32":
+            self.download_session.start_high_precision(high_precision_runtime_dir())
+        else:
+            model_name, model_url = model_download_spec(self.config)
+            expected_size, expected_sha256 = model_download_integrity(self.config)
+            self.download_session.start(
+                resolve_model_dir(self.config),
+                model_name=model_name,
+                model_url=model_url,
+                expected_size=expected_size,
+                expected_sha256=expected_sha256,
+                required_files=(
+                    self.config.asr.encoder,
+                    self.config.asr.decoder,
+                    self.config.asr.joiner,
+                    self.config.asr.tokens,
+                ),
+            )
 
     @Slot(object)
     def _download_model_from_settings(self, requested: AppConfig) -> None:
@@ -733,6 +744,7 @@ class CaptionApplication(QObject):
             return
         if (
             requested.asr.model_variant != self.config.asr.model_variant
+            or requested.asr.precision != self.config.asr.precision
             or model_dir != self.config.asr.model_dir
             or requested.asr.language != self.config.asr.language
         ):
@@ -759,6 +771,8 @@ class CaptionApplication(QObject):
     def _model_download_stage(self, text: str) -> None:
         if "解压" in text:
             self._set_model_status("正在解压")
+        elif text.startswith(("正在准备", "正在安装")):
+            self._set_model_status(text)
         else:
             self._set_model_status("正在连接")
 
@@ -800,9 +814,14 @@ class CaptionApplication(QObject):
     def _set_model_missing(self) -> None:
         self.model_text = "未安装"
         if hasattr(self, "model_action"):
-            self.model_action.setText("下载语音识别模型…")
-            self.model_action.setToolTip("下载语音识别模型")
-            self.model_action.setStatusTip("下载语音识别模型")
+            label = (
+                "下载高精度识别组件…"
+                if self.config.asr.precision == "fp32"
+                else "下载语音识别模型…"
+            )
+            self.model_action.setText(label)
+            self.model_action.setToolTip(label.removesuffix("…"))
+            self.model_action.setStatusTip(label.removesuffix("…"))
             self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
             self.settings.set_model_status("未安装", downloadable=True)

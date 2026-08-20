@@ -1,6 +1,7 @@
 {
   "asr": {
     "model_variant": "english",
+    "precision": "int8",
     "model_dir": "models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
     "encoder": "encoder.int8.onnx",
     "decoder": "decoder.int8.onnx",

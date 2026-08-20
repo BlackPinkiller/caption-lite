@@ -25,6 +25,9 @@ class SherpaStreamingRecognition:
             endpoint=bool(self._recognizer.is_endpoint(self._stream)),
         )
 
+    def finalize(self) -> RecognitionUpdate:
+        return self.accept(np.zeros(9600, dtype=np.float32))
+
 
 class SherpaOnnxRecognitionBackend:
     def __init__(self, *, app_paths: AppPaths = DEFAULT_APP_PATHS) -> None:

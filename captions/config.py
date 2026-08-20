@@ -168,6 +168,7 @@ def bundled_resource_path(name: str) -> Path:
 @dataclass
 class AsrConfig:
     model_variant: str = "english"
+    precision: str = "int8"
     model_dir: str = f"models/{MODEL_NAME}"
     encoder: str = "encoder.int8.onnx"
     decoder: str = "decoder.int8.onnx"
@@ -482,6 +483,11 @@ def _normalize_config(config: AppConfig) -> None:
     if config.asr.model_variant not in MODEL_PRESETS:
         config.asr.model_variant = defaults.asr.model_variant
     preset = MODEL_CATALOG[config.asr.model_variant]
+    if (
+        config.asr.precision not in {"int8", "fp32"}
+        or not supports_high_precision(config.asr.model_variant)
+    ):
+        config.asr.precision = "int8"
     valid_languages = set(preset.supported_languages)
     if preset.supports_auto_language:
         valid_languages.add("auto")
@@ -783,6 +789,10 @@ def model_is_complete(
     *,
     app_paths: AppPaths = DEFAULT_APP_PATHS,
 ) -> bool:
+    if config.asr.precision == "fp32":
+        from captions.high_precision_runtime import high_precision_runtime_ready
+
+        return high_precision_runtime_ready(app_paths=app_paths)
     return all(
         path.is_file()
         for path in resolve_model_files(config, app_paths=app_paths).values()
@@ -803,6 +813,10 @@ def model_preset(model_variant: str) -> ModelPreset:
     return MODEL_CATALOG.get(model_variant, MODEL_CATALOG["english"])
 
 
+def supports_high_precision(model_variant: str) -> bool:
+    return model_variant in {"english", "english_1120"}
+
+
 def apply_model_preset(asr: AsrConfig, model_variant: str) -> None:
     preset = model_preset(model_variant)
     asr.model_variant = model_variant if model_variant in MODEL_CATALOG else "english"
@@ -812,6 +826,8 @@ def apply_model_preset(asr: AsrConfig, model_variant: str) -> None:
     asr.joiner = preset.joiner
     asr.tokens = preset.tokens
     asr.language = preset.default_language
+    if not supports_high_precision(asr.model_variant):
+        asr.precision = "int8"
 
 
 def default_model_dir(model_variant: str) -> str:

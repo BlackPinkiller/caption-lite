@@ -267,8 +267,10 @@ class DiagnosticsTests(unittest.TestCase):
                 self.qt_app.processEvents()
                 time.sleep(0.002)
             events = [
-                json.loads(line)
+                event
                 for line in path.read_text(encoding="utf-8").splitlines()
+                if (event := json.loads(line))["session"]
+                == session.diagnostics.session_id
             ]
             session.close()
             deadline = time.monotonic() + 2

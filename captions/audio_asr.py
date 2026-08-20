@@ -7,7 +7,7 @@ from collections import deque
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
-from captions.adapters.sherpa_onnx_recognition import DEFAULT_RECOGNITION_BACKEND
+from captions.adapters.recognition_router import DEFAULT_RECOGNITION_BACKEND
 from captions.config import AppConfig
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
@@ -226,8 +226,16 @@ class AudioAsrWorker(QObject):
                                 update = recognition.accept(speech)
                                 text = update.text
                                 if vad_endpoint and text.strip():
-                                    flush = recognition.accept(
-                                        np.zeros(VAD_FLUSH_SAMPLES, dtype=np.float32)
+                                    finalize = getattr(recognition, "finalize", None)
+                                    flush = (
+                                        finalize()
+                                        if callable(finalize)
+                                        else recognition.accept(
+                                            np.zeros(
+                                                VAD_FLUSH_SAMPLES,
+                                                dtype=np.float32,
+                                            )
+                                        )
                                     )
                                     if flush.text:
                                         text = flush.text
