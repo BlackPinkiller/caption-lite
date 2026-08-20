@@ -24,6 +24,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
+    QListView,
     QScrollArea,
     QStyle,
     QStyleOptionGroupBox,
@@ -927,7 +928,13 @@ class CaptureLifecycleTests(unittest.TestCase):
         qt_app = QApplication.instance() or QApplication([])
         for status_kind, color in TRAY_STATUS_COLORS.items():
             image = CaptionApplication._app_icon(status_kind).pixmap(64, 64).toImage()
-            self.assertEqual(image.pixelColor(51, 47).name(), color)
+            self.assertEqual(image.pixelColor(48, 44).name(), color)
+            colored_pixels = sum(
+                image.pixelColor(x, y).name() == color
+                for x in range(64)
+                for y in range(64)
+            )
+            self.assertGreater(colored_pixels, 280)
         self.assertIsNotNone(qt_app)
 
     def test_tray_status_indicator_distinguishes_runtime_states(self) -> None:
@@ -2451,6 +2458,16 @@ class HistoryDialogTests(unittest.TestCase):
         self.assertIn("一条完整的当前译文。", item.text())
         dialog.set_live(translation="更新后的实时译文。")
         self.assertIn("更新后的实时译文。", item.text())
+        dialog.close()
+
+    def test_history_uses_small_pixel_scroll_steps(self) -> None:
+        dialog = HistoryDialog()
+
+        self.assertEqual(
+            dialog.list.verticalScrollMode(),
+            QListView.ScrollMode.ScrollPerPixel,
+        )
+        self.assertEqual(dialog.list.verticalScrollBar().singleStep(), 28)
         dialog.close()
 
     def test_empty_state_and_count_follow_history_content(self) -> None:

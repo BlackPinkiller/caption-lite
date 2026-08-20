@@ -43,10 +43,10 @@ def compact_model_status(text: str, maximum: int = 22) -> str:
 
 
 TRAY_STATUS_COLORS = {
-    "working": "#2e7d32",
-    "standby": "#f9a825",
-    "paused": "#7a7a7a",
-    "error": "#c62828",
+    "working": "#22c55e",
+    "standby": "#fbbf24",
+    "paused": "#9ca3af",
+    "error": "#ef4444",
 }
 
 
@@ -288,9 +288,9 @@ class CaptionApplication(QObject):
         if status_kind is not None:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#f7f7f7"))
-            painter.drawEllipse(40, 36, 22, 22)
+            painter.drawEllipse(33, 29, 31, 31)
             painter.setBrush(QColor(TRAY_STATUS_COLORS[status_kind]))
-            painter.drawEllipse(44, 40, 14, 14)
+            painter.drawEllipse(38, 34, 21, 21)
         painter.end()
         return QIcon(pixmap)
 
