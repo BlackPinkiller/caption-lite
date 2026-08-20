@@ -1,6 +1,10 @@
 package com.captions.android.ui.settings
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.captions.android.core.session.FontChoice
 
 @Composable
@@ -14,7 +18,7 @@ internal fun AppearanceSettingsPage(
 ) {
     SettingsPage {
         SettingGroup(label = "字体") {
-            ChoiceRow(
+            SegmentedChoiceRow(
                 choices = listOf(
                     FontChoice.System to "系统",
                     FontChoice.Serif to "衬线",
@@ -22,11 +26,12 @@ internal fun AppearanceSettingsPage(
                 ),
                 selected = fontChoice,
                 onSelected = onFontChoiceChanged,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
-        }
-        SettingGroup(label = "字号") {
-            SizeSetting("原文", sourceSizeSp, onSourceSizeChanged)
-            SizeSetting("译文", translationSizeSp, onTranslationSizeChanged)
+            HorizontalDivider()
+            SizeSetting("原文字号", sourceSizeSp, onSourceSizeChanged)
+            HorizontalDivider()
+            SizeSetting("译文字号", translationSizeSp, onTranslationSizeChanged)
         }
     }
 }

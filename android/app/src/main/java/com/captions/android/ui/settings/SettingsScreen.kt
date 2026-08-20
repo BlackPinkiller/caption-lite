@@ -7,24 +7,31 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -33,8 +40,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captions.android.core.session.DisplayMode
@@ -130,12 +138,10 @@ fun SettingsScreen(
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
                     engine = state.recognitionEngine,
                     language = state.translationSettings.sourceLanguage,
-                    splitPunctuation = state.splitPunctuation,
                     modelState = modelState,
                     systemModelState = systemModelState,
                     onEngineChanged = onRecognitionEngineChanged,
                     onLanguageChanged = onRecognitionLanguageChanged,
-                    onSplitPunctuationChanged = onSplitPunctuationChanged,
                     onDownloadModel = onDownloadModel,
                     onDownloadSystemModel = onDownloadSystemModel,
                 )
@@ -149,10 +155,12 @@ fun SettingsScreen(
                 )
                 SettingsDestination.Captions -> CaptionSettingsPage(
                     displayMode = state.displayMode,
+                    splitPunctuation = state.splitPunctuation,
                     overlayEnabled = state.overlayEnabled,
                     backgroundEnabled = state.overlayBackgroundEnabled,
                     overlayPosition = state.overlayPosition,
                     onDisplayModeChanged = onDisplayModeChanged,
+                    onSplitPunctuationChanged = onSplitPunctuationChanged,
                     onOverlayEnabledChanged = onOverlayEnabledChanged,
                     onOverlayBackgroundChanged = onOverlayBackgroundChanged,
                     onOverlayPositionChanged = onOverlayPositionChanged,
@@ -186,8 +194,9 @@ private fun SettingsHome(
             .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        CategoryGroup(label = "核心") {
+        SettingGroup(label = "识别与翻译") {
             SettingsDestinationRow(
+                icon = Icons.Filled.Mic,
                 title = "语音识别",
                 summary = recognitionSummary(
                     state.recognitionEngine,
@@ -200,7 +209,9 @@ private fun SettingsHome(
                 ),
                 onClick = { onOpen(SettingsDestination.Recognition) },
             )
+            HorizontalDivider()
             SettingsDestinationRow(
+                icon = Icons.Filled.Translate,
                 title = "翻译",
                 summary = translationSummary(
                     state.translationSettings,
@@ -213,13 +224,16 @@ private fun SettingsHome(
                 onClick = { onOpen(SettingsDestination.Translation) },
             )
         }
-        CategoryGroup(label = "显示") {
+        SettingGroup(label = "显示") {
             SettingsDestinationRow(
+                icon = Icons.Filled.Subtitles,
                 title = "字幕",
                 summary = captionSummary(state),
                 onClick = { onOpen(SettingsDestination.Captions) },
             )
+            HorizontalDivider()
             SettingsDestinationRow(
+                icon = Icons.Filled.Palette,
                 title = "外观",
                 summary = appearanceSummary(state),
                 onClick = { onOpen(SettingsDestination.Appearance) },
@@ -229,42 +243,37 @@ private fun SettingsHome(
 }
 
 @Composable
-private fun CategoryGroup(label: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text(
-            text = label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        content()
-    }
-}
-
-@Composable
 private fun SettingsDestinationRow(
+    icon: ImageVector,
     title: String,
     summary: String,
     onClick: () -> Unit,
 ) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ListItem(
-            headlineContent = { Text(title) },
-            supportingContent = {
-                Text(summary, maxLines = 1)
-            },
-            trailingContent = {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                )
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        SettingsTonalIcon(icon = icon, contentDescription = null)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = summary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 2,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
