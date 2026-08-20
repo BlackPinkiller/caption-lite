@@ -55,6 +55,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     private val recognitionSession = QueuedRecognitionSession(
         SherpaNemotronRecognitionFactory(
             recognitionModelManager::modelDirectory,
+            { sessionStore.state.value.nemotronModel },
             appContext.assets,
         ),
     )

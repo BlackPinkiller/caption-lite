@@ -3,6 +3,7 @@ package com.captions.android.platform.recognition
 import android.content.res.AssetManager
 import com.captions.android.core.recognition.VadGate
 import com.captions.android.core.recognition.VadGatedStreamingRecognizer
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.StreamingRecognizer
 import com.captions.android.ports.StreamingRecognizerFactory
@@ -18,6 +19,7 @@ import java.io.File
 
 class SherpaNemotronRecognitionFactory(
     private val modelDirectory: () -> File,
+    private val selectedModel: () -> NemotronModel,
     private val assetManager: AssetManager,
 ) : StreamingRecognizerFactory {
     override fun create(): StreamingRecognizer {
@@ -53,7 +55,10 @@ class SherpaNemotronRecognitionFactory(
         val recognizer = SherpaNemotronRecognition(
             OnlineRecognizer(assetManager = null, config = config),
         )
-        val gate = VadGate(SherpaSpeechActivityVad(assetManager))
+        val gate = VadGate(
+            SherpaSpeechActivityVad(assetManager),
+            preRollWindows = vadPreRollWindows(selectedModel()),
+        )
         return VadGatedStreamingRecognizer(recognizer, gate)
     }
 
@@ -68,6 +73,11 @@ class SherpaNemotronRecognitionFactory(
             "tokens.txt",
         )
     }
+}
+
+internal fun vadPreRollWindows(model: NemotronModel): Int = when (model) {
+    NemotronModel.English560Ms -> 32
+    NemotronModel.English1120Ms -> 48
 }
 
 private class SherpaNemotronRecognition(
