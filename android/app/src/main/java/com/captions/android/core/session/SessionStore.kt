@@ -24,6 +24,7 @@ class SessionStore(
                 overlayBackgroundEnabled = it.overlayBackgroundEnabled,
                 overlayPosition = it.overlayPosition,
                 recognitionEngine = initialRecognitionEngine,
+                nemotronModel = settingsStore.loadNemotronModel(),
                 splitPunctuation = settingsStore.loadSplitPunctuation(),
                 translationSettings = initialTranslationSettings,
             )
@@ -104,6 +105,11 @@ class SessionStore(
         )
         settingsStore.saveRecognitionEngine(engine)
         settingsStore.saveTranslation(translationSettings)
+    }
+
+    override fun setNemotronModel(model: NemotronModel) {
+        mutableState.value = mutableState.value.copy(nemotronModel = model, message = "")
+        settingsStore.saveNemotronModel(model)
     }
 
     override fun setSplitPunctuation(enabled: Boolean) {

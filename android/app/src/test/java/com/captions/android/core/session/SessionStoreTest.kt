@@ -76,12 +76,24 @@ class SessionStoreTest {
         assertFalse(settings.splitPunctuation)
     }
 
+    @Test
+    fun `nemotron model selection updates state and persists`() {
+        val settings = MemorySettingsStore()
+        val store = SessionStore(settings)
+
+        store.setNemotronModel(NemotronModel.English1120Ms)
+
+        assertEquals(NemotronModel.English1120Ms, store.state.value.nemotronModel)
+        assertEquals(NemotronModel.English1120Ms, settings.nemotronModel)
+    }
+
     private class MemorySettingsStore(
         private var recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
         var translation: TranslationSettings = TranslationSettings(),
     ) : SettingsStore {
         var appearance = AppearanceSettings()
         var splitPunctuation = true
+        var nemotronModel = NemotronModel.English560Ms
 
         override fun loadAppearance(): AppearanceSettings = appearance
 
@@ -93,6 +105,12 @@ class SessionStoreTest {
 
         override fun saveRecognitionEngine(engine: RecognitionEngine) {
             recognitionEngine = engine
+        }
+
+        override fun loadNemotronModel(): NemotronModel = nemotronModel
+
+        override fun saveNemotronModel(model: NemotronModel) {
+            nemotronModel = model
         }
 
         override fun loadSplitPunctuation(): Boolean = splitPunctuation

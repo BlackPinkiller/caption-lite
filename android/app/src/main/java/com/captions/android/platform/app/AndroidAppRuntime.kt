@@ -4,6 +4,7 @@ import android.content.Context
 import com.captions.android.core.recognition.QueuedRecognitionSession
 import com.captions.android.core.recognition.RecognitionSegmenter
 import com.captions.android.core.session.SessionStore
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.translation.RealtimeTranslationSession
 import com.captions.android.core.translation.TranslationRouter
 import com.captions.android.platform.audio.AndroidMicrophoneInput
@@ -29,7 +30,10 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
     private val settingsStore = AndroidSettingsStore(appContext)
 
     val sessionStore = SessionStore(settingsStore)
-    val recognitionModelManager = AndroidNemotronModelManager(appContext)
+    val recognitionModelManager = AndroidNemotronModelManager(
+        appContext,
+        sessionStore.state.value.nemotronModel,
+    )
     val systemRecognitionModelManager = AndroidSpeechModelManager(appContext)
     val translationModelManager = AndroidTranslationModelManager(appContext)
     val gemma4ModelManager = Gemma4ModelManager(appContext)
@@ -48,18 +52,20 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         },
     )
 
+    private val recognitionSession = QueuedRecognitionSession(
+        SherpaNemotronRecognitionFactory(
+            recognitionModelManager::modelDirectory,
+            appContext.assets,
+        ),
+    )
+
     val sessionController = AndroidSessionController(
         audioInput = AndroidMicrophoneInput(),
         viewModel = sessionStore,
         segmenter = RecognitionSegmenter(
             splitPunctuation = sessionStore.state.value.splitPunctuation,
         ),
-        recognitionSession = QueuedRecognitionSession(
-            SherpaNemotronRecognitionFactory(
-                recognitionModelManager::modelDirectory,
-                appContext.assets,
-            ),
-        ),
+        recognitionSession = recognitionSession,
         systemRecognitionSession = AndroidSystemRecognitionSession(
             context = appContext,
             language = {
@@ -75,6 +81,11 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         translationSession.cancelPending()
         translationModelManager.configure(sessionStore.state.value.translationSettings)
         gemma4ModelManager.configure(sessionStore.state.value.translationSettings)
+    }
+
+    fun applyNemotronModel(model: NemotronModel) {
+        recognitionSession.reload()
+        recognitionModelManager.configure(model)
     }
 
     fun setAppVisible(visible: Boolean) {

@@ -60,9 +60,31 @@ class QueuedRecognitionSessionTest {
         session.close()
     }
 
+    @Test
+    fun reloadClosesTheCachedRecognizerBeforeCreatingTheSelectedModel() {
+        val first = FakeRecognizer()
+        val second = FakeRecognizer()
+        val recognizers = ArrayDeque(listOf(first, second))
+        val firstReady = CountDownLatch(1)
+        val secondReady = CountDownLatch(1)
+        val session = QueuedRecognitionSession { recognizers.removeFirst() }
+
+        session.start(firstReady::countDown, {}, { throw AssertionError(it) })
+        assertTrue(firstReady.await(2, TimeUnit.SECONDS))
+
+        session.reload()
+        session.start(secondReady::countDown, {}, { throw AssertionError(it) })
+
+        assertTrue(secondReady.await(2, TimeUnit.SECONDS))
+        assertEquals(1, first.closeCount)
+        assertEquals(1, second.resetCount)
+        session.close()
+    }
+
     private class FakeRecognizer : StreamingRecognizer {
         var acceptCount = 0
         var resetCount = 0
+        var closeCount = 0
 
         override fun reset() {
             resetCount += 1
@@ -73,6 +95,8 @@ class QueuedRecognitionSessionTest {
             return RecognitionUpdate("recognized", endpoint = true)
         }
 
-        override fun close() = Unit
+        override fun close() {
+            closeCount += 1
+        }
     }
 }

@@ -3,6 +3,7 @@ package com.captions.android.platform.session
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.recognition.RecognitionSegmenter
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.DirectRecognitionSession
@@ -428,6 +429,10 @@ class AndroidSessionControllerTest {
         override fun saveRecognitionEngine(engine: RecognitionEngine) {
             this.engine = engine
         }
+
+        override fun loadNemotronModel(): NemotronModel = NemotronModel.English560Ms
+
+        override fun saveNemotronModel(model: NemotronModel) = Unit
 
         override fun loadSplitPunctuation(): Boolean = true
 

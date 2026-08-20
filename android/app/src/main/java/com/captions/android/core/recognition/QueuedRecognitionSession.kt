@@ -74,6 +74,14 @@ class QueuedRecognitionSession(
         samples.clear()
     }
 
+    fun reload() {
+        stop()
+        executor.execute {
+            recognizer?.close()
+            recognizer = null
+        }
+    }
+
     override fun close() {
         stop()
         executor.execute {

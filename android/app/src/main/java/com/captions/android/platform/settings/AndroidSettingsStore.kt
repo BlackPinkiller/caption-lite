@@ -6,6 +6,7 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.ports.SettingsStore
@@ -53,6 +54,15 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
 
     override fun saveRecognitionEngine(engine: RecognitionEngine) {
         preferences.edit().putString(KEY_RECOGNITION_ENGINE, engine.name).apply()
+    }
+
+    override fun loadNemotronModel(): NemotronModel = enumValue(
+        preferences.getString(KEY_NEMOTRON_MODEL, null),
+        NemotronModel.English560Ms,
+    )
+
+    override fun saveNemotronModel(model: NemotronModel) {
+        preferences.edit().putString(KEY_NEMOTRON_MODEL, model.name).apply()
     }
 
     override fun loadSplitPunctuation(): Boolean =
@@ -114,6 +124,7 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_OVERLAY_BACKGROUND = "overlay_background"
         const val KEY_OVERLAY_POSITION = "overlay_position"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
+        const val KEY_NEMOTRON_MODEL = "nemotron_model"
         const val KEY_SPLIT_PUNCTUATION = "split_punctuation"
         const val KEY_TRANSLATION_ENABLED = "translation_enabled"
         const val KEY_TRANSLATION_ENGINE = "translation_engine"

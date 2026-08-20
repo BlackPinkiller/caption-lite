@@ -4,6 +4,7 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationSettings
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,7 @@ interface SessionStateController {
     fun setOverlayBackgroundEnabled(enabled: Boolean)
     fun setOverlayPosition(position: OverlayPosition)
     fun setRecognitionEngine(engine: RecognitionEngine)
+    fun setNemotronModel(model: NemotronModel)
     fun setSplitPunctuation(enabled: Boolean)
     fun setTranslationSettings(settings: TranslationSettings)
     fun showMessage(message: String)

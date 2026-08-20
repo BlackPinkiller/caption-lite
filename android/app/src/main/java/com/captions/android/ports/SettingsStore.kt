@@ -2,6 +2,7 @@ package com.captions.android.ports
 
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.TranslationSettings
 
 interface SettingsStore {
@@ -9,6 +10,8 @@ interface SettingsStore {
     fun saveAppearance(settings: AppearanceSettings)
     fun loadRecognitionEngine(): RecognitionEngine
     fun saveRecognitionEngine(engine: RecognitionEngine)
+    fun loadNemotronModel(): NemotronModel
+    fun saveNemotronModel(model: NemotronModel)
     fun loadSplitPunctuation(): Boolean
     fun saveSplitPunctuation(enabled: Boolean)
     fun loadTranslation(): TranslationSettings

@@ -139,6 +139,14 @@ class MainActivity : ComponentActivity() {
                                     sessionViewModel.state.value.translationSettings.sourceLanguage,
                                 )
                             },
+                            onNemotronModelChanged = { model ->
+                                if (state.running || state.starting) {
+                                    sessionController.pause()
+                                    CaptionSessionService.stop(this@MainActivity)
+                                }
+                                sessionViewModel.setNemotronModel(model)
+                                runtime.applyNemotronModel(model)
+                            },
                             onRecognitionLanguageChanged = { language ->
                                 sessionViewModel.setTranslationSettings(
                                     state.translationSettings.copy(sourceLanguage = language),

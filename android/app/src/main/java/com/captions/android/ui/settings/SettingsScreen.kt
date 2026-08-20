@@ -49,6 +49,7 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.core.session.TranslationSettings
@@ -64,6 +65,7 @@ fun SettingsScreen(
     translationModelState: ModelState,
     gemma4ModelState: ModelState,
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
+    onNemotronModelChanged: (NemotronModel) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
     onSplitPunctuationChanged: (Boolean) -> Unit,
     onDownloadModel: () -> Unit,
@@ -137,10 +139,12 @@ fun SettingsScreen(
                 )
                 SettingsDestination.Recognition -> RecognitionSettingsPage(
                     engine = state.recognitionEngine,
+                    nemotronModel = state.nemotronModel,
                     language = state.translationSettings.sourceLanguage,
                     modelState = modelState,
                     systemModelState = systemModelState,
                     onEngineChanged = onRecognitionEngineChanged,
+                    onNemotronModelChanged = onNemotronModelChanged,
                     onLanguageChanged = onRecognitionLanguageChanged,
                     onDownloadModel = onDownloadModel,
                     onDownloadSystemModel = onDownloadSystemModel,
@@ -200,6 +204,7 @@ private fun SettingsHome(
                 title = "语音识别",
                 summary = recognitionSummary(
                     state.recognitionEngine,
+                    state.nemotronModel,
                     state.translationSettings.sourceLanguage,
                     if (state.recognitionEngine == RecognitionEngine.Nemotron) {
                         modelState
@@ -280,12 +285,19 @@ private fun SettingsDestinationRow(
 
 private fun recognitionSummary(
     engine: RecognitionEngine,
+    nemotronModel: NemotronModel,
     language: String,
     state: ModelState,
 ): String = when (engine) {
     RecognitionEngine.AndroidSystem ->
         "系统识别 · ${languageName(language)} · ${modelSummary(state)}"
-    RecognitionEngine.Nemotron -> "Nemotron · 英语 · ${modelSummary(state)}"
+    RecognitionEngine.Nemotron ->
+        "Nemotron ${nemotronModel.summary()} · 英语 · ${modelSummary(state)}"
+}
+
+private fun NemotronModel.summary(): String = when (this) {
+    NemotronModel.English560Ms -> "560 ms"
+    NemotronModel.English1120Ms -> "1120 ms"
 }
 
 private fun translationSummary(settings: TranslationSettings, state: ModelState): String {

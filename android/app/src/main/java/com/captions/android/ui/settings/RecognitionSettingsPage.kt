@@ -6,15 +6,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.captions.android.core.session.RecognitionEngine
+import com.captions.android.core.session.NemotronModel
 import com.captions.android.ports.ModelState
 
 @Composable
 internal fun RecognitionSettingsPage(
     engine: RecognitionEngine,
+    nemotronModel: NemotronModel,
     language: String,
     modelState: ModelState,
     systemModelState: ModelState,
     onEngineChanged: (RecognitionEngine) -> Unit,
+    onNemotronModelChanged: (NemotronModel) -> Unit,
     onLanguageChanged: (String) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
@@ -44,6 +47,15 @@ internal fun RecognitionSettingsPage(
         }
         if (engine == RecognitionEngine.Nemotron) {
             SettingGroup(label = "本地模型") {
+                SettingDropdown(
+                    title = "模型延迟",
+                    selectedLabel = nemotronModel.label(),
+                    onSelected = { value ->
+                        onNemotronModelChanged(NemotronModel.valueOf(value))
+                    },
+                    choices = NemotronModel.entries.map { it.name to it.label() },
+                )
+                HorizontalDivider()
                 ModelStatusRow(
                     state = modelState,
                     onDownload = onDownloadModel,
@@ -63,4 +75,9 @@ internal fun RecognitionSettingsPage(
             }
         }
     }
+}
+
+private fun NemotronModel.label(): String = when (this) {
+    NemotronModel.English560Ms -> "560 ms"
+    NemotronModel.English1120Ms -> "1120 ms"
 }

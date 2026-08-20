@@ -23,6 +23,11 @@ enum class RecognitionEngine {
     AndroidSystem,
 }
 
+enum class NemotronModel {
+    English560Ms,
+    English1120Ms,
+}
+
 enum class TranslationEngine {
     GoogleOnDevice,
     Google2,
@@ -83,6 +88,7 @@ data class SessionUiState(
     val overlayBackgroundEnabled: Boolean = true,
     val overlayPosition: OverlayPosition = OverlayPosition.Bottom,
     val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
+    val nemotronModel: NemotronModel = NemotronModel.English560Ms,
     val splitPunctuation: Boolean = true,
     val translationSettings: TranslationSettings = TranslationSettings(),
     val entries: List<SessionEntry> = emptyList(),
