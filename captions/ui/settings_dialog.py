@@ -487,7 +487,7 @@ class SettingsDialog(QDialog):
         standby_form = QFormLayout(standby_group)
         self.auto_standby = WheelSafeComboBox()
         for label, seconds in (
-            ("关闭（默认）", 0), ("30 秒无声音", 30), ("1 分钟无声音", 60),
+            ("关闭", 0), ("30 秒无声音（默认）", 30), ("1 分钟无声音", 60),
             ("3 分钟无声音", 180), ("5 分钟无声音", 300),
         ):
             self.auto_standby.addItem(label, seconds)

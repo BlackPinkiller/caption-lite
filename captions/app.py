@@ -41,6 +41,47 @@ def compact_model_status(text: str, maximum: int = 22) -> str:
     return compact
 
 
+TRAY_STATUS_COLORS = {
+    "working": "#2e7d32",
+    "standby": "#f9a825",
+    "paused": "#7a7a7a",
+    "error": "#c62828",
+}
+
+
+def tray_status_kind(
+    *,
+    capturing: bool,
+    capture_paused: bool,
+    auto_standby: bool,
+    asr_error_message: str,
+    status_text: str,
+    model_text: str,
+) -> str:
+    error_prefixes = ("识别无法", "缺少语音", "模型下载失败", "翻译不可用")
+    if (
+        asr_error_message
+        or model_text == "未安装"
+        or status_text.startswith(error_prefixes)
+    ):
+        return "error"
+    if auto_standby:
+        return "standby"
+    if capture_paused or not capturing:
+        return "paused"
+    transitional_prefixes = (
+        "正在启动",
+        "正在连接",
+        "正在重连",
+        "正在恢复",
+        "正在应用",
+        "正在下载",
+    )
+    if status_text.startswith(transitional_prefixes):
+        return "standby"
+    return "working"
+
+
 class CaptionApplication(QObject):
     MODES = ("bilingual", "source", "translation")
 
@@ -227,7 +268,7 @@ class CaptionApplication(QObject):
         return tray
 
     @staticmethod
-    def _app_icon() -> QIcon:
+    def _app_icon(status_kind: str | None = None) -> QIcon:
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -241,6 +282,12 @@ class CaptionApplication(QObject):
         font.setPixelSize(27)
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "CC")
+        if status_kind is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#f7f7f7"))
+            painter.drawEllipse(40, 36, 22, 22)
+            painter.setBrush(QColor(TRAY_STATUS_COLORS[status_kind]))
+            painter.drawEllipse(44, 40, 14, 14)
         painter.end()
         return QIcon(pixmap)
 
@@ -866,6 +913,20 @@ class CaptionApplication(QObject):
         if hasattr(self, "device_action"):
             self.device_action.setText(f"设备：{compact_device}")
         if hasattr(self, "tray"):
+            status_kind = tray_status_kind(
+                capturing=self.capturing,
+                capture_paused=self.capture_paused,
+                auto_standby=self.auto_standby,
+                asr_error_message=self.asr_error_message,
+                status_text=self.status_text,
+                model_text=self.model_text,
+            )
+            if (
+                hasattr(self.tray, "setIcon")
+                and status_kind != getattr(self, "_tray_status_kind", None)
+            ):
+                self.tray.setIcon(self._app_icon(status_kind))
+                self._tray_status_kind = status_kind
             self.tray.setToolTip(
                 "实时字幕\n"
                 f"状态：{compact_status}\n"

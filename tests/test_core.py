@@ -33,7 +33,13 @@ from captions.adapters.sherpa_onnx_recognition import (
     SherpaOnnxRecognitionBackend,
     SherpaStreamingRecognition,
 )
-from captions.app import CaptionApplication, TranslationJob, compact_model_status
+from captions.app import (
+    CaptionApplication,
+    TRAY_STATUS_COLORS,
+    TranslationJob,
+    compact_model_status,
+    tray_status_kind,
+)
 from captions.audio_asr import (
     CAPTURE_BLOCK_SIZE,
     CAPTURE_BUFFER_SIZE,
@@ -898,6 +904,42 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_tray_status_icons_render_the_selected_corner_color(self) -> None:
+        qt_app = QApplication.instance() or QApplication([])
+        for status_kind, color in TRAY_STATUS_COLORS.items():
+            image = CaptionApplication._app_icon(status_kind).pixmap(64, 64).toImage()
+            self.assertEqual(image.pixelColor(51, 47).name(), color)
+        self.assertIsNotNone(qt_app)
+
+    def test_tray_status_indicator_distinguishes_runtime_states(self) -> None:
+        common = {
+            "capturing": True,
+            "capture_paused": False,
+            "auto_standby": False,
+            "asr_error_message": "",
+            "status_text": "正在识别",
+            "model_text": "已加载",
+        }
+        self.assertEqual(tray_status_kind(**common), "working")
+        self.assertEqual(
+            tray_status_kind(**{**common, "auto_standby": True}),
+            "standby",
+        )
+        self.assertEqual(
+            tray_status_kind(
+                **{**common, "capturing": False, "capture_paused": True}
+            ),
+            "paused",
+        )
+        self.assertEqual(
+            tray_status_kind(**{**common, "asr_error_message": "启动失败"}),
+            "error",
+        )
+        self.assertEqual(
+            tray_status_kind(**{**common, "model_text": "未安装"}),
+            "error",
+        )
+
     def test_only_560_ms_english_uses_the_shorter_vad_pre_roll(self) -> None:
         self.assertEqual(vad_pre_roll_windows("english"), 32)
         self.assertEqual(vad_pre_roll_windows("english_1120"), 48)
@@ -912,6 +954,10 @@ class CaptureLifecycleTests(unittest.TestCase):
             status_text="空闲",
             device_text="默认播放设备",
             model_text="未安装",
+            capturing=False,
+            capture_paused=False,
+            auto_standby=False,
+            asr_error_message="",
             model_action=SimpleNamespace(
                 setText=lambda text: action_state.__setitem__("text", text),
                 setToolTip=lambda text: action_state.__setitem__("tooltip", text),
@@ -2804,7 +2850,7 @@ class ConfigTests(unittest.TestCase):
         config = AppConfig()
         self.assertEqual(config.asr.model_variant, "english")
         self.assertEqual(config.asr.language, "en")
-        self.assertEqual(config.asr.auto_standby_seconds, 0)
+        self.assertEqual(config.asr.auto_standby_seconds, 30)
         self.assertEqual(config.asr.num_threads, 2)
         self.assertEqual(config.asr.silence_endpoint_ms, 400)
         self.assertEqual(config.asr.silence_min_chars, 4)
@@ -2824,7 +2870,7 @@ class ConfigTests(unittest.TestCase):
         loaded, _ = load_config(Path(__file__).resolve().parent.parent / "config.example.json")
         self.assertEqual(loaded.asr.model_variant, "english")
         self.assertEqual(loaded.asr.language, "en")
-        self.assertEqual(loaded.asr.auto_standby_seconds, 0)
+        self.assertEqual(loaded.asr.auto_standby_seconds, 30)
         self.assertEqual(loaded.asr.num_threads, 2)
         self.assertEqual(loaded.asr.silence_endpoint_ms, 400)
         self.assertEqual(loaded.asr.silence_min_chars, 4)

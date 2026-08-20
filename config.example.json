@@ -8,7 +8,7 @@
     "joiner": "joiner.int8.onnx",
     "tokens": "tokens.txt",
     "language": "en",
-    "auto_standby_seconds": 0,
+    "auto_standby_seconds": 30,
     "num_threads": 2,
     "silence_endpoint_ms": 400,
     "silence_min_chars": 4

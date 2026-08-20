@@ -175,7 +175,7 @@ class AsrConfig:
     joiner: str = "joiner.int8.onnx"
     tokens: str = "tokens.txt"
     language: str = "en"
-    auto_standby_seconds: int = 0
+    auto_standby_seconds: int = 30
     num_threads: int = 2
     silence_endpoint_ms: int = 400
     silence_min_chars: int = 4
