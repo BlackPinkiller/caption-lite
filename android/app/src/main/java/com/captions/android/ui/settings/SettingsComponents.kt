@@ -239,12 +239,12 @@ internal fun SettingDropdown(
     choices: List<Pair<String, String>> = LANGUAGES,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        SettingRow(
-            title = title,
-            enabled = enabled,
-            onClick = { expanded = true },
-            trailingContent = {
+    SettingRow(
+        title = title,
+        enabled = enabled,
+        onClick = { expanded = true },
+        trailingContent = {
+            Box {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = selectedLabel,
@@ -262,20 +262,23 @@ internal fun SettingDropdown(
                         modifier = Modifier.size(20.dp),
                     )
                 }
-            },
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            choices.forEach { (code, name) ->
-                DropdownMenuItem(
-                    text = { Text(name) },
-                    onClick = {
-                        expanded = false
-                        onSelected(code)
-                    },
-                )
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    choices.forEach { (code, name) ->
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = {
+                                expanded = false
+                                onSelected(code)
+                            },
+                        )
+                    }
+                }
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
