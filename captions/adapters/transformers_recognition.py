@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -20,12 +21,47 @@ from captions.ports.recognition import ASR_SAMPLE_RATE, RecognitionUpdate
 
 
 _END = object()
+_DLL_DIRECTORY_HANDLES: list[object] = []
+_DLL_DIRECTORIES: set[str] = set()
+
+
+def _activate_external_runtime(site_packages: Path) -> None:
+    site_packages = site_packages.resolve()
+    runtime_root = site_packages.parents[2]
+    python_root = runtime_root / "python"
+    base = next(
+        (
+            path
+            for path in sorted(python_root.glob("cpython-*-windows-x86_64-none"))
+            if (path / "Lib").is_dir() and (path / "DLLs").is_dir()
+        ),
+        None,
+    )
+    if base is None:
+        raise RuntimeError("高精度识别组件的独立 Python 环境不完整")
+
+    import_paths = (site_packages, base / "Lib", base / "DLLs")
+    for path in reversed(import_paths):
+        value = str(path)
+        if value not in sys.path:
+            sys.path.insert(0, value)
+
+    if hasattr(os, "add_dll_directory"):
+        for path in (
+            base,
+            base / "DLLs",
+            site_packages / "torch" / "lib",
+            site_packages / "numpy.libs",
+        ):
+            value = str(path)
+            if path.is_dir() and value not in _DLL_DIRECTORIES:
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(value))
+                _DLL_DIRECTORIES.add(value)
 
 
 class TransformersStreamingRecognition:
     def __init__(self, model_dir: Path, site_packages: Path, latency_ms: int) -> None:
-        if str(site_packages) not in sys.path:
-            sys.path.insert(0, str(site_packages))
+        _activate_external_runtime(site_packages)
         try:
             import torch
             from transformers import (
@@ -34,7 +70,8 @@ class TransformersStreamingRecognition:
                 TextIteratorStreamer,
             )
         except (ImportError, OSError) as error:
-            raise RuntimeError("高精度识别组件无法加载，请重新下载") from error
+            detail = str(error).strip() or type(error).__name__
+            raise RuntimeError(f"高精度识别组件无法加载：{detail}") from error
         if not torch.cuda.is_available():
             raise RuntimeError("高精度模式需要可用的 NVIDIA 显卡")
 

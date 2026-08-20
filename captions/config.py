@@ -799,6 +799,22 @@ def model_is_complete(
     )
 
 
+def model_install_key(
+    config: AppConfig,
+    *,
+    app_paths: AppPaths = DEFAULT_APP_PATHS,
+) -> tuple[str, ...]:
+    if config.asr.precision == "fp32":
+        from captions.high_precision_runtime import high_precision_runtime_dir
+
+        return ("fp32", str(high_precision_runtime_dir(app_paths=app_paths)))
+    return (
+        "int8",
+        config.asr.model_variant,
+        str(resolve_model_dir(config, app_paths=app_paths)),
+    )
+
+
 def model_download_spec(config: AppConfig) -> tuple[str, str]:
     return MODEL_PRESETS.get(config.asr.model_variant, MODEL_PRESETS["english"])
 

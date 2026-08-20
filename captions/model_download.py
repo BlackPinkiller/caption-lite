@@ -19,7 +19,7 @@ class DownloadCancelled(Exception):
 
 
 class ModelDownloadWorker(QObject):
-    progress = Signal(int, int)
+    progress = Signal(object, object)
     status = Signal(str)
     completed = Signal()
     cancelled = Signal()
@@ -85,7 +85,11 @@ class ModelDownloadWorker(QObject):
                 with self._response_lock:
                     self._response = response
                 try:
-                    total = int(response.headers.get("Content-Length") or 0)
+                    total = int(
+                        response.headers.get("Content-Length")
+                        or self.expected_size
+                        or 0
+                    )
                     downloaded = 0
                     digest = hashlib.sha256()
                     with archive.open("wb") as output:

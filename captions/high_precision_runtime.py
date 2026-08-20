@@ -27,7 +27,7 @@ UV_SIZE = 22_407_450
 UV_SHA256 = "4c1d55501869b3330d4aabf45ad6024ce2367e0f3af83344395702d272c22e88"
 MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b"
 MODEL_REVISION = "ebe59e5a817142986528bbbee5dba8db7b38ed50"
-RUNTIME_REVISION = "nemotron-fp32-v1"
+RUNTIME_REVISION = "nemotron-fp32-v2"
 
 
 @dataclass(frozen=True)
@@ -119,8 +119,41 @@ def high_precision_runtime_ready(
     )
 
 
+def _repair_moved_venv(root: Path) -> None:
+    python_root = root / "python"
+    base = next(
+        (
+            path
+            for path in sorted(python_root.glob("cpython-*-windows-x86_64-none"))
+            if (path / "python.exe").is_file()
+        ),
+        None,
+    )
+    if base is None:
+        raise RuntimeError("独立 Python 运行环境不完整")
+    scripts = root / ".venv" / "Scripts"
+    for name in ("python.exe", "pythonw.exe"):
+        source = base / name
+        if not source.is_file():
+            raise RuntimeError("独立 Python 启动程序不完整")
+        shutil.copy2(source, scripts / name)
+    configuration = root / ".venv" / "pyvenv.cfg"
+    lines = configuration.read_text(encoding="utf-8").splitlines()
+    lines = [line for line in lines if not line.startswith("home = ")]
+    lines.insert(0, f"home = {base}")
+    configuration.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    completed = subprocess.run(
+        [scripts / "python.exe", "-c", "pass"],
+        capture_output=True,
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode:
+        raise RuntimeError("独立 Python 运行环境无法启动")
+
+
 class HighPrecisionInstallWorker(QObject):
-    progress = Signal(int, int)
+    progress = Signal(object, object)
     status = Signal(str)
     completed = Signal()
     cancelled = Signal()
@@ -284,8 +317,11 @@ class HighPrecisionInstallWorker(QObject):
                 self.destination.replace(backup)
             try:
                 staging.replace(self.destination)
+                _repair_moved_venv(self.destination)
             except Exception:
-                if had_previous and backup.exists() and not self.destination.exists():
+                if self.destination.exists():
+                    shutil.rmtree(self.destination, ignore_errors=True)
+                if had_previous and backup.exists():
                     backup.replace(self.destination)
                 raise
             else:

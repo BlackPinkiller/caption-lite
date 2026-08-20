@@ -53,7 +53,9 @@ from captions.config import (
     apply_subtitle_theme,
     clone_config,
     default_model_dir,
+    model_install_key,
     model_is_complete,
+    model_preset,
     supports_high_precision,
     subtitle_custom_style,
     subtitle_style_values,
@@ -415,6 +417,8 @@ class SettingsDialog(QDialog):
         self._draft_custom_style = subtitle_custom_style(config.subtitle)
         self._llm_providers: list[LlmProviderConfig] = []
         self._current_llm_provider_id: str | None = None
+        self._model_download_target: AppConfig | None = None
+        self._model_download_text = ""
         self.setWindowTitle("实时字幕设置")
         self.resize(680, 620)
         layout = QVBoxLayout(self)
@@ -1033,18 +1037,32 @@ class SettingsDialog(QDialog):
             ("下载 ", "已下载 ", "正在连接", "正在解压", "正在准备", "正在安装")
         )
         if downloadable:
+            verb = "重新下载" if text.endswith("失败") else "下载"
             label = (
-                "下载高精度识别组件…"
+                f"{verb}高精度识别组件…"
                 if self.asr_precision.currentData() == "fp32"
-                else "下载语音识别模型…"
+                else f"{verb}语音识别模型…"
             )
         elif active:
             label = text
         else:
             label = f"模型：{text}"
         self.model_status.setText(label)
-        self.model_status.setToolTip(label)
+        self.model_status.setToolTip(
+            f"模型：{text}" if downloadable and text.endswith("失败") else label
+        )
         self.model_status.setEnabled(downloadable)
+
+    def set_model_download_status(
+        self,
+        target: AppConfig | None,
+        text: str = "",
+    ) -> None:
+        self._model_download_target = (
+            clone_config(target) if target is not None else None
+        )
+        self._model_download_text = text
+        self._refresh_model_path_status()
 
     def set_translation_test_status(
         self, text: str, *, success: bool | None = None
@@ -1063,16 +1081,37 @@ class SettingsDialog(QDialog):
     def _refresh_model_path_status(self, *args) -> None:
         if not hasattr(self, "model_status"):
             return
+        config = self._selected_model_config()
+        target = self._model_download_target
+        if target is not None:
+            if model_install_key(config) == model_install_key(target):
+                self.set_model_status(self._model_download_text or "正在连接")
+            else:
+                target_label = (
+                    "高精度识别组件"
+                    if target.asr.precision == "fp32"
+                    else model_preset(target.asr.model_variant).label
+                )
+                label = "其他模型正在下载…"
+                self.model_status.setText(label)
+                self.model_status.setToolTip(
+                    f"{target_label}：{self._model_download_text or '正在连接'}"
+                )
+                self.model_status.setEnabled(False)
+            return
+        if model_is_complete(config):
+            self.set_model_status("已就绪")
+        else:
+            self.set_model_status("未安装", downloadable=True)
+
+    def _selected_model_config(self) -> AppConfig:
         config = clone_config(self.config)
         selected_variant = self.model_variant.currentData()
         if selected_variant != config.asr.model_variant:
             apply_model_preset(config.asr, selected_variant)
         config.asr.precision = self.asr_precision.currentData()
         config.asr.model_dir = self.model_dir.text().strip()
-        if model_is_complete(config):
-            self.set_model_status("已就绪")
-        else:
-            self.set_model_status("未安装", downloadable=True)
+        return config
 
     @staticmethod
     def _select(combo: QComboBox, value: str) -> None:

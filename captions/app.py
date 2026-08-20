@@ -17,6 +17,7 @@ from captions.config import (
     load_config,
     model_download_integrity,
     model_download_spec,
+    model_install_key,
     model_is_complete,
     model_preset,
     resolve_model_dir,
@@ -120,6 +121,8 @@ class CaptionApplication(QObject):
         self.download_session = ModelDownloadSession(self)
         self.download_prompt: QMessageBox | None = None
         self.download_succeeded = False
+        self.download_target: AppConfig | None = None
+        self.download_status_text = ""
         self.capturing = False
         self.capture_paused = False
         self.auto_standby = False
@@ -573,6 +576,8 @@ class CaptionApplication(QObject):
         self._set_status(f"识别无法启动：{message}", compact)
         if missing:
             self._set_model_missing()
+        else:
+            self._set_model_load_failed()
         self.tray.showMessage(
             "实时字幕",
             message,
@@ -758,34 +763,46 @@ class CaptionApplication(QObject):
     @Slot()
     def download_model(self) -> None:
         if self.download_session.running:
+            if self.download_target is not None:
+                self._set_download_status(
+                    self.download_status_text or "正在连接下载服务器"
+                )
             return
-        if model_is_complete(self.config):
+        if model_is_complete(self.config) and not self.asr_error_message:
             self._set_model_status("已就绪")
             return
+        target = clone_config(self.config)
         self.download_succeeded = False
+        self.download_target = target
         self._set_status("正在下载模型")
-        self._set_model_status("正在连接")
-        if self.config.asr.precision == "fp32":
+        self._set_download_status("正在连接下载服务器")
+        if target.asr.precision == "fp32":
             self.download_session.start_high_precision(high_precision_runtime_dir())
         else:
-            model_name, model_url = model_download_spec(self.config)
-            expected_size, expected_sha256 = model_download_integrity(self.config)
+            model_name, model_url = model_download_spec(target)
+            expected_size, expected_sha256 = model_download_integrity(target)
             self.download_session.start(
-                resolve_model_dir(self.config),
+                resolve_model_dir(target),
                 model_name=model_name,
                 model_url=model_url,
                 expected_size=expected_size,
                 expected_sha256=expected_sha256,
                 required_files=(
-                    self.config.asr.encoder,
-                    self.config.asr.decoder,
-                    self.config.asr.joiner,
-                    self.config.asr.tokens,
+                    target.asr.encoder,
+                    target.asr.decoder,
+                    target.asr.joiner,
+                    target.asr.tokens,
                 ),
             )
 
     @Slot(object)
     def _download_model_from_settings(self, requested: AppConfig) -> None:
+        if self.download_session.running:
+            if self.download_target is not None:
+                self._set_download_status(
+                    self.download_status_text or "正在连接下载服务器"
+                )
+            return
         model_dir = requested.asr.model_dir.strip()
         if not model_dir:
             return
@@ -801,45 +818,40 @@ class CaptionApplication(QObject):
             self.apply_settings(config)
         self.download_model()
 
-    @Slot(int, int)
+    @Slot(object, object)
     def _model_download_progress(self, downloaded: int, total: int) -> None:
         if total > 0:
             percent = max(0, min(100, round(downloaded * 100 / total)))
             downloaded_mb = downloaded / (1024 * 1024)
             total_mb = total / (1024 * 1024)
-            self._set_model_status(
+            self._set_download_status(
                 f"下载 {percent}% · {downloaded_mb:.0f}/{total_mb:.0f} MB"
             )
         else:
             megabytes = downloaded / (1024 * 1024)
-            self._set_model_status(f"已下载 {megabytes:.0f} MB")
+            self._set_download_status(f"已下载 {megabytes:.0f} MB")
 
     @Slot(str)
     def _model_download_stage(self, text: str) -> None:
-        if "解压" in text:
-            self._set_model_status("正在解压")
-        elif text.startswith(("正在准备", "正在安装")):
-            self._set_model_status(text)
-        else:
-            self._set_model_status("正在连接")
+        self._set_download_status(text)
 
     @Slot()
     def _model_download_completed(self) -> None:
         self.download_succeeded = True
-        self._set_model_status("已就绪")
+        self._set_download_status("已就绪")
         self._set_status("模型下载完成")
 
     @Slot()
     def _model_download_cancelled(self) -> None:
         if not self.closing:
             self._set_status("模型下载已取消")
-            self._set_model_missing()
+            self._set_download_status("下载已取消")
 
     @Slot(str)
     def _model_download_error(self, message: str) -> None:
         self.download_succeeded = False
         self._set_status("模型下载失败")
-        self._set_model_missing()
+        self._set_download_status("下载失败")
         if not self.closing:
             self.tray.showMessage(
                 "模型下载失败",
@@ -850,15 +862,45 @@ class CaptionApplication(QObject):
 
     @Slot()
     def _download_thread_finished(self) -> None:
-        succeeded = self.download_succeeded and model_is_complete(self.config)
+        target = self.download_target
+        target_is_selected = (
+            target is not None
+            and model_install_key(target) == model_install_key(self.config)
+        )
+        terminal_status = self.download_status_text
+        succeeded = (
+            self.download_succeeded
+            and target is not None
+            and model_is_complete(target)
+        )
+        selected_target_finished = succeeded and target_is_selected
+        self.download_target = None
+        self.download_status_text = ""
+        if hasattr(self, "settings"):
+            self.settings.set_model_download_status(None)
         if self.closing:
             self._maybe_finish_quit()
-        elif succeeded:
+        elif selected_target_finished:
+            self._set_model_status("已就绪")
             self.start_capture()
+        elif target_is_selected and terminal_status == "下载失败":
+            self._set_model_failure("下载失败")
         else:
-            self._set_model_missing()
+            if model_is_complete(self.config):
+                self._set_model_status(
+                    "已加载"
+                    if self.model_loaded and self.capture_session.running
+                    else "已就绪"
+                )
+            else:
+                self._set_model_missing()
 
     def _set_model_missing(self) -> None:
+        if self.download_target is not None:
+            self._set_download_status(
+                self.download_status_text or "正在连接下载服务器"
+            )
+            return
         self.model_text = "未安装"
         if hasattr(self, "model_action"):
             label = (
@@ -875,6 +917,24 @@ class CaptionApplication(QObject):
         self._refresh_tray_status()
 
     def _set_model_status(self, text: str) -> None:
+        if self.download_target is not None:
+            self._set_download_status(
+                self.download_status_text or "正在连接下载服务器"
+            )
+            return
+        self._set_model_action_status(text)
+        if hasattr(self, "settings"):
+            self.settings.set_model_status(text)
+
+    def _set_download_status(self, text: str) -> None:
+        if self.download_target is None:
+            return
+        self.download_status_text = text
+        self._set_model_action_status(text)
+        if hasattr(self, "settings"):
+            self.settings.set_model_download_status(self.download_target, text)
+
+    def _set_model_action_status(self, text: str) -> None:
         self.model_text = text
         if hasattr(self, "model_action"):
             full_text = f"模型：{text}"
@@ -882,8 +942,30 @@ class CaptionApplication(QObject):
             self.model_action.setToolTip(full_text)
             self.model_action.setStatusTip(full_text)
             self.model_action.setEnabled(False)
+        self._refresh_tray_status()
+
+    def _set_model_load_failed(self) -> None:
+        if self.download_target is not None:
+            self._set_download_status(
+                self.download_status_text or "正在连接下载服务器"
+            )
+            return
+        self._set_model_failure("加载失败")
+
+    def _set_model_failure(self, text: str) -> None:
+        self.model_text = text
+        if hasattr(self, "model_action"):
+            label = (
+                "重新下载高精度识别组件…"
+                if self.config.asr.precision == "fp32"
+                else "重新下载语音识别模型…"
+            )
+            self.model_action.setText(label)
+            self.model_action.setToolTip(label.removesuffix("…"))
+            self.model_action.setStatusTip(label.removesuffix("…"))
+            self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
-            self.settings.set_model_status(text)
+            self.settings.set_model_status(text, downloadable=True)
         self._refresh_tray_status()
 
     def _set_status(self, text: str, menu_text: str | None = None) -> None:

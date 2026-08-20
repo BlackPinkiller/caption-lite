@@ -90,7 +90,7 @@ class CaptureSession(QObject):
 
 
 class ModelDownloadSession(QObject):
-    progress = Signal(int, int)
+    progress = Signal(object, object)
     status = Signal(str)
     completed = Signal()
     cancelled = Signal()

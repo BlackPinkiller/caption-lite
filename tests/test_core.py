@@ -904,6 +904,25 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_failed_download_keeps_a_retryable_failure_terminal_state(self) -> None:
+        config = AppConfig()
+        failures: list[str] = []
+        app = SimpleNamespace(
+            config=config,
+            download_target=config,
+            download_status_text="下载失败",
+            download_succeeded=False,
+            closing=False,
+            settings=SimpleNamespace(set_model_download_status=lambda target: None),
+            _set_model_failure=lambda text: failures.append(text),
+        )
+
+        CaptionApplication._download_thread_finished(app)
+
+        self.assertEqual(failures, ["下载失败"])
+        self.assertIsNone(app.download_target)
+        self.assertEqual(app.download_status_text, "")
+
     def test_tray_status_icons_render_the_selected_corner_color(self) -> None:
         qt_app = QApplication.instance() or QApplication([])
         for status_kind, color in TRAY_STATUS_COLORS.items():
@@ -958,6 +977,8 @@ class CaptureLifecycleTests(unittest.TestCase):
             capture_paused=False,
             auto_standby=False,
             asr_error_message="",
+            download_target=AppConfig(),
+            download_status_text="",
             model_action=SimpleNamespace(
                 setText=lambda text: action_state.__setitem__("text", text),
                 setToolTip=lambda text: action_state.__setitem__("tooltip", text),
@@ -965,12 +986,19 @@ class CaptureLifecycleTests(unittest.TestCase):
                 setEnabled=lambda value: action_state.__setitem__("enabled", value),
             ),
             settings=SimpleNamespace(
-                set_model_status=lambda text: settings_status.append(text)
+                set_model_download_status=lambda target, text: settings_status.append(
+                    text
+                )
             ),
             tray=SimpleNamespace(setToolTip=lambda text: tray_tooltips.append(text)),
         )
         app._refresh_tray_status = lambda: CaptionApplication._refresh_tray_status(app)
-        app._set_model_status = lambda text: CaptionApplication._set_model_status(app, text)
+        app._set_model_action_status = (
+            lambda text: CaptionApplication._set_model_action_status(app, text)
+        )
+        app._set_download_status = (
+            lambda text: CaptionApplication._set_download_status(app, text)
+        )
 
         CaptionApplication._model_download_progress(
             app,
@@ -987,10 +1015,10 @@ class CaptureLifecycleTests(unittest.TestCase):
 
         CaptionApplication._model_download_stage(app, "正在解压模型")
 
-        self.assertEqual(action_state["text"], "模型：正在解压")
-        self.assertEqual(action_state["tooltip"], "模型：正在解压")
-        self.assertEqual(settings_status[-1], "正在解压")
-        self.assertIn("模型：正在解压", tray_tooltips[-1])
+        self.assertEqual(action_state["text"], "模型：正在解压模型")
+        self.assertEqual(action_state["tooltip"], "模型：正在解压模型")
+        self.assertEqual(settings_status[-1], "正在解压模型")
+        self.assertIn("模型：正在解压模型", tray_tooltips[-1])
 
     def test_capture_uses_low_latency_reads_with_a_larger_device_buffer(self) -> None:
         self.assertEqual(CAPTURE_BLOCK_SIZE, VAD_WINDOW_SIZE * 3)
@@ -1923,6 +1951,25 @@ class SettingsDialogTests(unittest.TestCase):
         dialog.set_model_status("正在解压")
         self.assertEqual(dialog.model_status.text(), "正在解压")
         self.assertEqual(dialog.model_status.toolTip(), "正在解压")
+        dialog.close()
+
+    def test_active_model_download_survives_selection_and_reload(self) -> None:
+        target = AppConfig()
+        dialog = SettingsDialog(target)
+        dialog.set_model_download_status(target, "下载 38% · 176/464 MB")
+        self.assertEqual(dialog.model_status.text(), "下载 38% · 176/464 MB")
+
+        dialog._select(dialog.model_variant, "multilingual")
+        self.assertEqual(dialog.model_status.text(), "其他模型正在下载…")
+        self.assertIn("下载 38%", dialog.model_status.toolTip())
+        self.assertFalse(dialog.model_status.isEnabled())
+
+        dialog.load(target)
+        self.assertEqual(dialog.model_status.text(), "下载 38% · 176/464 MB")
+        self.assertFalse(dialog.model_status.isEnabled())
+
+        dialog.set_model_download_status(None)
+        self.assertNotEqual(dialog.model_status.text(), "下载 38% · 176/464 MB")
         dialog.close()
 
     def test_settings_are_separated_into_clear_sections(self) -> None:
@@ -2977,7 +3024,7 @@ class ModelDownloadTests(unittest.TestCase):
         payload = self._archive()
 
         class Response(io.BytesIO):
-            headers = {"Content-Length": str(len(payload))}
+            headers = {}
 
             def __enter__(self):
                 return self
@@ -3008,6 +3055,7 @@ class ModelDownloadTests(unittest.TestCase):
 
             self.assertEqual(completed, [True])
             self.assertTrue(progress)
+            self.assertEqual(progress[-1], (len(payload), len(payload)))
             self.assertTrue((destination / "encoder.int8.onnx").is_file())
             self.assertFalse((destination / "obsolete.onnx").exists())
             self.assertFalse(any(Path(directory).glob(".*.download")))

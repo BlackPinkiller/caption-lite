@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,12 +17,15 @@ from PySide6.QtWidgets import QApplication
 
 from captions.adapters.recognition_router import RecognitionRouter
 from captions.adapters.sherpa_onnx_recognition import SherpaStreamingRecognition
+from captions.adapters.transformers_recognition import _activate_external_runtime
 from captions.config import AppConfig, load_config, model_is_complete
 from captions.high_precision_runtime import (
     RUNTIME_REVISION,
     RuntimeFile,
+    _repair_moved_venv,
     high_precision_runtime_ready,
 )
+from captions.task_sessions import ModelDownloadSession
 from captions.ui.settings_dialog import SettingsDialog
 
 
@@ -55,6 +59,48 @@ class HighPrecisionConfigTests(unittest.TestCase):
 
 
 class HighPrecisionRuntimeTests(unittest.TestCase):
+    def test_moved_runtime_rewrites_venv_launchers_to_final_location(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            base = runtime / "python" / "cpython-3.12.0-windows-x86_64-none"
+            scripts = runtime / ".venv" / "Scripts"
+            base.mkdir(parents=True)
+            scripts.mkdir(parents=True)
+            (base / "python.exe").write_bytes(b"base-python")
+            (base / "pythonw.exe").write_bytes(b"base-pythonw")
+            (scripts / "python.exe").write_bytes(b"staging-launcher")
+            (scripts / "pythonw.exe").write_bytes(b"staging-launcher")
+            config = runtime / ".venv" / "pyvenv.cfg"
+            config.write_text("home = old-staging-path\ninclude-system-site-packages = false\n")
+
+            with patch(
+                "captions.high_precision_runtime.subprocess.run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run:
+                _repair_moved_venv(runtime)
+
+            self.assertEqual((scripts / "python.exe").read_bytes(), b"base-python")
+            self.assertTrue(config.read_text().startswith(f"home = {base}\n"))
+            run.assert_called_once()
+
+    def test_external_runtime_adds_its_standard_library_and_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            site_packages = runtime / ".venv" / "Lib" / "site-packages"
+            base = runtime / "python" / "cpython-3.12.0-windows-x86_64-none"
+            site_packages.mkdir(parents=True)
+            (base / "Lib").mkdir(parents=True)
+            (base / "DLLs").mkdir()
+            original = sys.path.copy()
+            try:
+                _activate_external_runtime(site_packages)
+                self.assertEqual(
+                    sys.path[:3],
+                    [str(site_packages), str(base / "Lib"), str(base / "DLLs")],
+                )
+            finally:
+                sys.path[:] = original
+
     def test_ready_marker_and_model_files_are_required(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -77,6 +123,19 @@ class HighPrecisionRuntimeTests(unittest.TestCase):
                 self.assertFalse(
                     high_precision_runtime_ready(app_paths=app_paths)
                 )
+
+    def test_download_progress_preserves_values_above_two_gibibytes(self) -> None:
+        session = ModelDownloadSession()
+        observed: list[tuple[int, int]] = []
+        session.progress.connect(
+            lambda downloaded, total: observed.append((downloaded, total))
+        )
+        downloaded = 3 * 1024**3
+        total = 4 * 1024**3
+
+        session.progress.emit(downloaded, total)
+
+        self.assertEqual(observed, [(downloaded, total)])
 
 
 class RecognitionRouterTests(unittest.TestCase):
@@ -129,6 +188,9 @@ class HighPrecisionSettingsTests(unittest.TestCase):
             self.assertEqual(dialog.values().asr.precision, "fp32")
             dialog.set_model_status("未安装", downloadable=True)
             self.assertEqual(dialog.model_status.text(), "下载高精度识别组件…")
+            dialog.set_model_status("加载失败", downloadable=True)
+            self.assertEqual(dialog.model_status.text(), "重新下载高精度识别组件…")
+            self.assertEqual(dialog.model_status.toolTip(), "模型：加载失败")
 
             dialog._select(dialog.model_variant, "chinese")
             self.assertFalse(dialog.asr_precision.isVisibleTo(dialog))
