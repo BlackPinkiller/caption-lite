@@ -97,7 +97,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 pass
 
         class SpeechGate:
-            def __init__(inner_self, vad) -> None:
+            def __init__(inner_self, vad, **kwargs) -> None:
                 pass
 
             def process(inner_self, samples):

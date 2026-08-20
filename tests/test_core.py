@@ -43,6 +43,7 @@ from captions.audio_asr import (
     VadSpeechGate,
     capture_status_text,
     should_commit_endpoint,
+    vad_pre_roll_windows,
 )
 from captions.config import (
     AppConfig,
@@ -897,6 +898,12 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_only_560_ms_english_uses_the_shorter_vad_pre_roll(self) -> None:
+        self.assertEqual(vad_pre_roll_windows("english"), 32)
+        self.assertEqual(vad_pre_roll_windows("english_1120"), 48)
+        self.assertEqual(vad_pre_roll_windows("multilingual"), 48)
+        self.assertEqual(vad_pre_roll_windows("chinese"), 48)
+
     def test_model_download_progress_updates_compact_menu_and_full_tooltips(self) -> None:
         action_state: dict[str, object] = {}
         settings_status: list[str] = []
@@ -1246,7 +1253,7 @@ class AudioAsrTests(unittest.TestCase):
                 resets.append(True)
 
         class SpeechGate:
-            def __init__(inner_self, vad) -> None:
+            def __init__(inner_self, vad, **kwargs) -> None:
                 pass
 
             def process(inner_self, samples):
@@ -1308,7 +1315,7 @@ class AudioAsrTests(unittest.TestCase):
                 pass
 
         class SpeechGate:
-            def __init__(inner_self, vad) -> None:
+            def __init__(inner_self, vad, **kwargs) -> None:
                 pass
 
             def process(inner_self, samples):

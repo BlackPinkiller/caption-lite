@@ -18,9 +18,16 @@ from captions.segmenter import should_commit_endpoint
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
 VAD_PRE_ROLL_WINDOWS = 48
+NEMOTRON_560_VAD_PRE_ROLL_WINDOWS = 32
 VAD_FLUSH_SAMPLES = 9600
 CAPTURE_BLOCK_SIZE = VAD_WINDOW_SIZE * 3
 CAPTURE_BUFFER_SIZE = 8960
+
+
+def vad_pre_roll_windows(model_variant: str) -> int:
+    if model_variant == "english":
+        return NEMOTRON_560_VAD_PRE_ROLL_WINDOWS
+    return VAD_PRE_ROLL_WINDOWS
 
 
 def capture_status_text(capture_kind: AudioCaptureKind, state: str) -> str:
@@ -78,11 +85,16 @@ class VadSpeechGate:
     sentence's tail.
     """
 
-    def __init__(self, vad, window_size: int = VAD_WINDOW_SIZE) -> None:
+    def __init__(
+        self,
+        vad,
+        window_size: int = VAD_WINDOW_SIZE,
+        pre_roll_windows: int = VAD_PRE_ROLL_WINDOWS,
+    ) -> None:
         self.vad = vad
         self.window_size = window_size
         self.pending = np.empty(0, dtype=np.float32)
-        self.pre_roll: deque[np.ndarray] = deque(maxlen=VAD_PRE_ROLL_WINDOWS)
+        self.pre_roll: deque[np.ndarray] = deque(maxlen=pre_roll_windows)
         self.speech_active = False
 
     def reset(self) -> None:
@@ -149,7 +161,10 @@ class AudioAsrWorker(QObject):
         try:
             recognition = self.recognition_backend.create_streaming(self.config)
             speech_gate = VadSpeechGate(
-                self.recognition_backend.create_vad(self.config)
+                self.recognition_backend.create_vad(self.config),
+                pre_roll_windows=vad_pre_roll_windows(
+                    self.config.asr.model_variant
+                ),
             )
             if self._stop.is_set():
                 return
