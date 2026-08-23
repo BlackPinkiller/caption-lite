@@ -223,7 +223,7 @@ class SegmentationConfig:
     preview_min_chars: int = 4
     preview_interval_ms: int = 600
     preview_char_delta: int = 18
-    split_punctuation: bool = True
+    punctuation_mode: str = "sentence"
 
 
 @dataclass
@@ -576,7 +576,8 @@ def _normalize_config(config: AppConfig) -> None:
     segmentation.preview_char_delta = int(
         _clamp(segmentation.preview_char_delta, 1, 200)
     )
-    segmentation.split_punctuation = bool(segmentation.split_punctuation)
+    if segmentation.punctuation_mode not in {"off", "sentence", "all"}:
+        segmentation.punctuation_mode = defaults.segmentation.punctuation_mode
 
     subtitle = config.subtitle
     if subtitle.theme not in {*SUBTITLE_THEME_PRESETS, "custom"}:
@@ -677,6 +678,16 @@ def load_config(
                         legacy_stream = values.get("stream")
                         if isinstance(legacy_stream, bool):
                             config.translation.llm_providers[0].stream = legacy_stream
+                if section == "segmentation":
+                    if "punctuation_mode" not in values:
+                        legacy_punctuation = values.get("split_punctuation")
+                        if isinstance(legacy_punctuation, bool):
+                            values = {
+                                **values,
+                                "punctuation_mode": (
+                                    "sentence" if legacy_punctuation else "off"
+                                ),
+                            }
                 if section == "subtitle" and "max_sentences" not in values:
                     legacy_limit = values.get(
                         "max_rows", values.get("max_lines_per_language")

@@ -68,6 +68,8 @@ _ABBREVIATIONS = frozenset(
 )
 
 _TERMINAL_PUNCTUATION = re.compile(r"[。？！]|[.?!](?=\s|$)")
+_WEAK_PUNCTUATION = re.compile(r"[,，、;；:：]")
+_ALL_PUNCTUATION = re.compile(r"[。？！,，、;；:：]|[.?!](?=\s|$)")
 
 
 def should_commit_endpoint(
@@ -91,14 +93,18 @@ class Segmenter:
         max_seconds: float = 20.0,
         split_lookback_chars: int = 32,
         split_lookahead_chars: int = 160,
-        split_punctuation: bool = True,
+        punctuation_mode: str = "sentence",
         min_commit_chars: int = 4,
     ) -> None:
         self.max_chars = max_chars
         self.max_seconds = max_seconds
         self.split_lookback_chars = split_lookback_chars
         self.split_lookahead_chars = split_lookahead_chars
-        self.split_punctuation = split_punctuation
+        self.punctuation_mode = (
+            punctuation_mode
+            if punctuation_mode in {"off", "sentence", "all"}
+            else "sentence"
+        )
         self.min_commit_chars = max(1, int(min_commit_chars))
         self.reset()
 
@@ -106,6 +112,7 @@ class Segmenter:
         self._raw = ""
         self._consumed = 0
         self._started = 0.0
+        self._pending_weak_boundary = ""
 
     @property
     def active(self) -> str:
@@ -132,7 +139,7 @@ class Segmenter:
         commits: list[SegmentCommit] = []
 
         active = self.active
-        if self.split_punctuation:
+        if self.punctuation_mode != "off":
             while True:
                 boundary = self._next_boundary(active)
                 if boundary is None:
@@ -179,7 +186,24 @@ class Segmenter:
             end = match.end()
             if len(text[:end].strip()) < floor:
                 continue
+            self._pending_weak_boundary = ""
             return end
+
+        if self.punctuation_mode == "all":
+            for match in _WEAK_PUNCTUATION.finditer(text):
+                end = match.end()
+                if len(text[:end].strip()) < floor:
+                    continue
+                if self._is_numeric_separator(text, match.start(), end):
+                    continue
+                candidate = text[:end].strip()
+                stable = candidate == self._pending_weak_boundary
+                self._pending_weak_boundary = candidate
+                if stable and text[end:].strip():
+                    self._pending_weak_boundary = ""
+                    return end
+                return None
+        self._pending_weak_boundary = ""
         return None
 
     def _is_abbreviation(self, text: str, pos: int) -> bool:
@@ -195,6 +219,15 @@ class Segmenter:
             return True
         return token.lower() in _ABBREVIATIONS
 
+    @staticmethod
+    def _is_numeric_separator(text: str, start: int, end: int) -> bool:
+        return (
+            start > 0
+            and end < len(text)
+            and text[start - 1].isdigit()
+            and text[end].isdigit()
+        )
+
     def _window_split(self, text: str) -> tuple[int, bool] | None:
         soft = max(1, self.max_chars)
         lookback = max(0, self.split_lookback_chars)
@@ -204,11 +237,21 @@ class Segmenter:
         end = min(len(text), hard)
         window = text[start:end]
         punctuation: list[re.Match[str]] = []
-        if self.split_punctuation:
+        if self.punctuation_mode != "off":
+            pattern = (
+                _ALL_PUNCTUATION
+                if self.punctuation_mode == "all"
+                else _TERMINAL_PUNCTUATION
+            )
             punctuation = [
                 match
-                for match in _TERMINAL_PUNCTUATION.finditer(window)
+                for match in pattern.finditer(window)
                 if not self._is_abbreviation(text, start + match.start())
+                and not self._is_numeric_separator(
+                    text,
+                    start + match.start(),
+                    start + match.end(),
+                )
             ]
         if punctuation:
             after_soft = [match for match in punctuation if start + match.end() >= soft]
