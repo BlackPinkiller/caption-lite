@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -245,13 +246,44 @@ class DiagnosticsTests(unittest.TestCase):
             )
             translator.wait_closed()
 
+    def test_completed_translation_is_not_registered_again(self) -> None:
+        session = TranslationSession()
+
+        def complete_during_submit(
+            text, history, config, *, on_registered, **kwargs
+        ):
+            generation = 1
+            on_registered(generation)
+            session._result(generation, "complete")
+            return generation
+
+        session.translator.translate = complete_during_submit
+        generation = session.request_commit(
+            "source",
+            [],
+            AppConfig().translation,
+            record_id=41,
+            cue_id=7,
+        )
+
+        self.assertEqual(generation, 1)
+        self.assertEqual(session.jobs, {})
+        session.close()
+        deadline = time.monotonic() + 2
+        while session.shutting_down and time.monotonic() < deadline:
+            self.qt_app.processEvents()
+            time.sleep(0.002)
+
     def test_translation_trace_correlates_the_complete_job_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "captions-debug.jsonl"
             session = TranslationSession(diagnostics=Diagnostics(True, path))
+            progress_received = threading.Event()
+            session.progress.connect(lambda *args: progress_received.set())
 
             def translate(text, history, config, progress, **kwargs):
                 progress("partial")
+                self.assertTrue(progress_received.wait(1))
                 return "complete"
 
             session.translator._request = translate

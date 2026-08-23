@@ -96,8 +96,6 @@ class TranslationSession(QObject):
                 backend=config.backend,
             ),
         )
-        if generation not in self.jobs:
-            self._register_job(generation, job, backend=config.backend)
         return generation
 
     def request_test(self, text: str, config: TranslationConfig) -> int:
@@ -114,8 +112,6 @@ class TranslationSession(QObject):
                 backend=config.backend,
             ),
         )
-        if generation not in self.jobs:
-            self._register_job(generation, job, backend=config.backend)
         return generation
 
     def schedule_preview(
@@ -261,8 +257,6 @@ class TranslationSession(QObject):
                 backend=config.backend,
             ),
         )
-        if generation not in self.jobs:
-            self._register_job(generation, job, backend=config.backend)
 
     def _register_job(
         self,

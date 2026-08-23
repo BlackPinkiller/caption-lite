@@ -897,7 +897,12 @@ class TranslationSessionTests(unittest.TestCase):
     def test_commit_discards_preview_state_without_changing_text(self) -> None:
         session = TranslationSession()
         config = AppConfig()
-        session.translator.translate = lambda *args, **kwargs: 2
+        def translate(*args, on_registered=None, **kwargs):
+            if on_registered is not None:
+                on_registered(2)
+            return 2
+
+        session.translator.translate = translate
         session.translator.cancel_pending = lambda: None
         session.jobs[1] = TranslationJob("preview", None, "unchanged", 3)
         discarded: list[bool] = []
