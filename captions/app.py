@@ -542,7 +542,7 @@ class CaptionApplication(QObject):
         self, generation: int, job: TranslationJob, text: str
     ) -> None:
         if job.kind != "test" and text.strip():
-            self._restore_translation_status()
+            CaptionApplication._restore_translation_status(self)
         if job.kind == "preview":
             if generation == self.display_generation:
                 self._display_translation(job, text, final=True)
