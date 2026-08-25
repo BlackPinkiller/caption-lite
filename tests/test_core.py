@@ -390,6 +390,7 @@ class TranslationTests(unittest.TestCase):
         config.target_lang = "EN-US"
         config.google2_api_key = "editable-google2-key"
         response = SimpleNamespace(
+            status_code=200,
             raise_for_status=lambda: None,
             json=lambda: [["Hello"]],
         )
@@ -408,6 +409,7 @@ class TranslationTests(unittest.TestCase):
         config = AppConfig().translation
         config.google2_api_key = ""
         response = SimpleNamespace(
+            status_code=200,
             raise_for_status=lambda: None,
             json=lambda: [["测试译文"]],
         )
@@ -430,6 +432,39 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(
             client.post.call_args.kwargs["headers"]["X-Goog-API-Key"],
             "fetched-google2-key",
+        )
+
+    def test_google2_refreshes_a_rejected_cached_key_once(self) -> None:
+        config = AppConfig().translation
+        config.google2_api_key = "expired-google2-key"
+        rejected = SimpleNamespace(status_code=403)
+        accepted = SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: [["测试译文"]],
+        )
+        client = Mock()
+        client.post.side_effect = [rejected, accepted]
+
+        with patch.object(
+            Translator,
+            "acquire_google2_api_key",
+            return_value="refreshed-google2-key",
+        ) as acquire:
+            translated = Translator._google2(
+                "Test",
+                config,
+                15.0,
+                client=client,
+            )
+
+        self.assertEqual(translated, "测试译文")
+        self.assertEqual(config.google2_api_key, "refreshed-google2-key")
+        self.assertEqual(acquire.call_count, 1)
+        self.assertEqual(client.post.call_count, 2)
+        self.assertEqual(
+            client.post.call_args.kwargs["headers"]["X-Goog-API-Key"],
+            "refreshed-google2-key",
         )
 
     def test_google2_key_is_extracted_from_current_component_script(self) -> None:
@@ -961,6 +996,20 @@ class TranslationSessionTests(unittest.TestCase):
 
 
 class CaptureLifecycleTests(unittest.TestCase):
+    def test_successful_translation_restores_the_active_tray_status(self) -> None:
+        statuses: list[str] = []
+        app = SimpleNamespace(
+            status_text="翻译不可用：临时网络错误",
+            capturing=True,
+            capture_paused=False,
+            auto_standby=False,
+            _set_status=lambda text: statuses.append(text),
+        )
+
+        CaptionApplication._restore_translation_status(app)
+
+        self.assertEqual(statuses, ["正在识别"])
+
     def test_all_punctuation_keeps_source_translation_and_history_on_one_cue(self) -> None:
         config = AppConfig()
         config.segmentation.punctuation_mode = "all"

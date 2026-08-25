@@ -563,9 +563,17 @@ class Translator(QObject):
         }
         last_error: Exception | None = None
         post = client.post if client is not None else httpx.post
-        for _ in range(2):
+        for attempt in range(2):
             try:
                 response = post(url, headers=headers, json=payload, timeout=timeout)
+                if response.status_code in {401, 403} and attempt == 0:
+                    api_key = Translator.acquire_google2_api_key(
+                        timeout,
+                        client=client,
+                    )
+                    config.google2_api_key = api_key
+                    headers["X-Goog-API-Key"] = api_key
+                    continue
                 response.raise_for_status()
                 data = response.json()
                 return str(data[0][0])

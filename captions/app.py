@@ -157,7 +157,7 @@ class CaptionApplication(QObject):
             self.config.hotkey.modifiers, self.config.hotkey.virtual_key
         )
         self.hotkey.activated.connect(self.toggle_lock)
-        self.hotkey.install(qt_app)
+        self.hotkey_registered = self.hotkey.install(qt_app)
 
         self.tray = self._create_tray()
 
@@ -165,6 +165,14 @@ class CaptionApplication(QObject):
         self.overlay.show()
         self.overlay.raise_()
         self.tray.show()
+        if not self.hotkey_registered:
+            self.diagnostics.event("hotkey.registration_failed")
+            self.tray.showMessage(
+                "全局快捷键不可用",
+                "快捷键可能已被其他程序占用；仍可从托盘锁定字幕。",
+                QSystemTrayIcon.MessageIcon.Warning,
+                6000,
+            )
         if (
             self.config.translation.enabled
             and not self.config.translation.google2_api_key.strip()
@@ -533,6 +541,8 @@ class CaptionApplication(QObject):
     def _translation_result(
         self, generation: int, job: TranslationJob, text: str
     ) -> None:
+        if job.kind != "test" and text.strip():
+            self._restore_translation_status()
         if job.kind == "preview":
             if generation == self.display_generation:
                 self._display_translation(job, text, final=True)
@@ -561,6 +571,19 @@ class CaptionApplication(QObject):
             self._set_status(self.status_before_test or "翻译连接测试失败")
             return
         self._set_status(f"翻译不可用：{message}")
+
+    def _restore_translation_status(self) -> None:
+        if not getattr(self, "status_text", "").startswith("翻译不可用"):
+            return
+        if getattr(self, "auto_standby", False):
+            status = "自动待机"
+        elif getattr(self, "capture_paused", False) or not getattr(
+            self, "capturing", False
+        ):
+            status = "已暂停"
+        else:
+            status = "正在识别"
+        self._set_status(status)
 
     @Slot(int, object)
     def _translation_cancelled(self, generation: int, job: TranslationJob) -> None:
