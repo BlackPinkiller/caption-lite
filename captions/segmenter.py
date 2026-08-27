@@ -67,9 +67,11 @@ _ABBREVIATIONS = frozenset(
     }
 )
 
-_TERMINAL_PUNCTUATION = re.compile(r"[。？！]|[.?!](?=\s|$)")
+_TERMINAL_PUNCTUATION = re.compile(r"[。？！…]|[.?!]+")
 _WEAK_PUNCTUATION = re.compile(r"[,，、;；:：]")
-_ALL_PUNCTUATION = re.compile(r"[。？！,，、;；:：]|[.?!](?=\s|$)")
+_TERMINAL_MARKS = ".?!。？！…"
+_WEAK_MARKS = ",，、;；:："
+_CLOSING_PUNCTUATION = frozenset("\"'”’»」』】）》〕〗〙〛)]}")
 
 
 def should_commit_endpoint(
@@ -128,13 +130,21 @@ class Segmenter:
         now = time.monotonic() if now is None else now
         raw = " ".join(raw.split())
         if not raw:
-            self._raw = ""
+            self.reset()
             return SegmentUpdate("")
         if self._started == 0:
             self._started = now
         if self._consumed and not raw.startswith(self._raw[: self._consumed]):
-            self.reset()
-            self._started = now
+            reconciled = self._reconcile_consumed(
+                self._raw[: self._consumed],
+                raw,
+            )
+            self._pending_weak_boundary = ""
+            if reconciled is None:
+                self.reset()
+                self._started = now
+            else:
+                self._consumed = reconciled
         self._raw = raw
         commits: list[SegmentCommit] = []
 
@@ -147,6 +157,7 @@ class Segmenter:
                 committed = active[:boundary].strip()
                 self._consumed = self._active_start() + boundary
                 self._started = now
+                self._pending_weak_boundary = ""
                 commits.append(SegmentCommit(committed))
                 active = self.active
 
@@ -161,14 +172,16 @@ class Segmenter:
             commits.append(SegmentCommit(committed, True))
             return SegmentUpdate(self.active, tuple(commits))
 
-        if len(active) > self.max_chars:
+        while len(active) > self.max_chars:
             decision = self._window_split(active)
-            if decision is not None:
-                split, forced = decision
-                committed = active[:split].strip()
-                self._consumed = self._active_start() + split
-                self._started = now
-                commits.append(SegmentCommit(committed, forced))
+            if decision is None:
+                break
+            split, forced = decision
+            committed = active[:split].strip()
+            self._consumed = self._active_start() + split
+            self._started = now
+            commits.append(SegmentCommit(committed, forced))
+            active = self.active
         return SegmentUpdate(self.active, tuple(commits))
 
     def flush(self, forced: bool = False) -> SegmentUpdate:
@@ -180,21 +193,26 @@ class Segmenter:
 
     def _next_boundary(self, text: str) -> int | None:
         floor = max(1, self.min_commit_chars)
-        for match in _TERMINAL_PUNCTUATION.finditer(text):
-            if self._is_abbreviation(text, match.start()):
-                continue
-            end = match.end()
-            if len(text[:end].strip()) < floor:
-                continue
-            self._pending_weak_boundary = ""
-            return end
-
-        if self.punctuation_mode == "all":
-            for match in _WEAK_PUNCTUATION.finditer(text):
-                end = match.end()
+        if any(mark in text for mark in _TERMINAL_MARKS):
+            for match in _TERMINAL_PUNCTUATION.finditer(text):
+                if self._is_abbreviation(text, match.start()):
+                    continue
+                end = self._terminal_boundary_end(text, match)
+                if end is None:
+                    continue
                 if len(text[:end].strip()) < floor:
                     continue
-                if self._is_numeric_separator(text, match.start(), end):
+                self._pending_weak_boundary = ""
+                return end
+
+        if self.punctuation_mode == "all" and any(
+            mark in text for mark in _WEAK_MARKS
+        ):
+            for match in _WEAK_PUNCTUATION.finditer(text):
+                end = self._with_closing_punctuation(text, match.end())
+                if len(text[:end].strip()) < floor:
+                    continue
+                if self._is_numeric_separator(text, match.start(), match.end()):
                     continue
                 candidate = text[:end].strip()
                 stable = candidate == self._pending_weak_boundary
@@ -220,6 +238,23 @@ class Segmenter:
         return token.lower() in _ABBREVIATIONS
 
     @staticmethod
+    def _with_closing_punctuation(text: str, end: int) -> int:
+        while end < len(text) and text[end] in _CLOSING_PUNCTUATION:
+            end += 1
+        return end
+
+    def _terminal_boundary_end(
+        self,
+        text: str,
+        match: re.Match[str],
+    ) -> int | None:
+        end = self._with_closing_punctuation(text, match.end())
+        if text[match.start()] in ".?!" and end < len(text):
+            if not text[end].isspace():
+                return None
+        return end
+
+    @staticmethod
     def _is_numeric_separator(text: str, start: int, end: int) -> bool:
         return (
             start > 0
@@ -235,28 +270,33 @@ class Segmenter:
         hard = soft + lookahead
         start = max(0, soft - lookback)
         end = min(len(text), hard)
-        window = text[start:end]
-        punctuation: list[re.Match[str]] = []
+        punctuation: list[tuple[int, int]] = []
         if self.punctuation_mode != "off":
-            pattern = (
-                _ALL_PUNCTUATION
-                if self.punctuation_mode == "all"
-                else _TERMINAL_PUNCTUATION
-            )
-            punctuation = [
-                match
-                for match in pattern.finditer(window)
-                if not self._is_abbreviation(text, start + match.start())
-                and not self._is_numeric_separator(
-                    text,
-                    start + match.start(),
-                    start + match.end(),
-                )
-            ]
+            window = text[start:end]
+            if any(mark in window for mark in _TERMINAL_MARKS):
+                for match in _TERMINAL_PUNCTUATION.finditer(text, start, end):
+                    if self._is_abbreviation(text, match.start()):
+                        continue
+                    boundary = self._terminal_boundary_end(text, match)
+                    if boundary is not None:
+                        punctuation.append((match.start(), boundary))
+            if self.punctuation_mode == "all" and any(
+                mark in window for mark in _WEAK_MARKS
+            ):
+                for match in _WEAK_PUNCTUATION.finditer(text, start, end):
+                    if self._is_numeric_separator(text, match.start(), match.end()):
+                        continue
+                    punctuation.append(
+                        (
+                            match.start(),
+                            self._with_closing_punctuation(text, match.end()),
+                        )
+                    )
+            punctuation.sort()
         if punctuation:
-            after_soft = [match for match in punctuation if start + match.end() >= soft]
-            selected = after_soft[0] if after_soft else punctuation[-1]
-            return start + selected.end(), False
+            after_soft = [boundary for _, boundary in punctuation if boundary >= soft]
+            selected = after_soft[0] if after_soft else punctuation[-1][1]
+            return selected, False
         if len(text) < hard:
             return None
         floor = max(0, hard - lookback)
@@ -264,3 +304,31 @@ class Segmenter:
         position = head.rfind(" ", floor)
         split = position if position > floor else min(hard, len(text))
         return split, True
+
+    @staticmethod
+    def _reconcile_consumed(previous_prefix: str, revised: str) -> int | None:
+        previous = previous_prefix.rstrip()
+        if not previous:
+            return None
+        distances = list(range(len(revised) + 1))
+        for old_index, old_char in enumerate(previous):
+            following = [old_index + 1]
+            for new_index, new_char in enumerate(revised):
+                substitution = distances[new_index] + (old_char != new_char)
+                deletion = distances[new_index + 1] + 1
+                insertion = following[new_index] + 1
+                following.append(min(substitution, deletion, insertion))
+            distances = following
+        best_index = min(
+            range(len(distances)),
+            key=lambda index: (distances[index], abs(index - len(previous))),
+        )
+        allowed_changes = max(4, len(previous) // 3)
+        distance = distances[best_index]
+        if (
+            best_index == 0
+            or distance >= max(len(previous), best_index)
+            or distance > allowed_changes
+        ):
+            return None
+        return best_index

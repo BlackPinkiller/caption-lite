@@ -371,6 +371,9 @@ class CaptionApplication(QObject):
         else:
             if self.restart_after_stop:
                 self.restart_after_stop = False
+                update = self.segmenter.flush(forced=True)
+                for commit in update.commits:
+                    self._commit(commit.text, True)
                 self._set_status("正在应用设置并重启识别…")
                 QTimer.singleShot(0, self.start_capture)
             elif not self.asr_error_message:

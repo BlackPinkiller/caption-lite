@@ -143,6 +143,33 @@ class SegmenterTests(unittest.TestCase):
         self.assertEqual([c.text for c in update.commits], ["Mr. Smith is here."])
         self.assertEqual(update.active, "Next")
 
+    def test_sentence_boundary_keeps_closing_punctuation(self) -> None:
+        segmenter = Segmenter()
+
+        english = segmenter.update('He said "Hello." Next', now=1)
+        segmenter.reset()
+        chinese = segmenter.update("他说“你好。”然后继续", now=1)
+
+        self.assertEqual([c.text for c in english.commits], ['He said "Hello."'])
+        self.assertEqual(english.active, "Next")
+        self.assertEqual([c.text for c in chinese.commits], ["他说“你好。”"])
+        self.assertEqual(chinese.active, "然后继续")
+
+    def test_unicode_ellipsis_is_a_sentence_boundary(self) -> None:
+        update = Segmenter().update("Wait… Next", now=1)
+
+        self.assertEqual([c.text for c in update.commits], ["Wait…"])
+        self.assertEqual(update.active, "Next")
+
+    def test_each_identical_weak_boundary_requires_its_own_confirmation(self) -> None:
+        segmenter = Segmenter(punctuation_mode="all")
+        segmenter.update("word, word", now=1)
+
+        update = segmenter.update("word, word, tail", now=2)
+
+        self.assertEqual([c.text for c in update.commits], ["word,"])
+        self.assertEqual(update.active, "word, tail")
+
     def test_punctuation_disabled_defers_to_silence_and_limits(self) -> None:
         segmenter = Segmenter(punctuation_mode="off")
         update = segmenter.update("Hello world. More", now=1)
@@ -223,6 +250,60 @@ class SegmenterTests(unittest.TestCase):
             segmenter.update(text, now=1)
             lengths.append(len(segmenter.active))
         self.assertEqual(lengths, sorted(lengths, reverse=True))
+
+    def test_one_large_update_splits_until_the_tail_is_below_the_hard_limit(self) -> None:
+        segmenter = Segmenter(
+            max_chars=20,
+            split_lookback_chars=4,
+            split_lookahead_chars=5,
+            punctuation_mode="off",
+        )
+
+        update = segmenter.update("x" * 80, now=1)
+
+        self.assertEqual([len(commit.text) for commit in update.commits], [25, 25, 25])
+        self.assertEqual(update.active, "x" * 5)
+
+    def test_minor_revision_after_a_forced_commit_keeps_the_consumed_boundary(self) -> None:
+        segmenter = Segmenter(max_chars=500, max_seconds=10)
+        original = (
+            "recognition continues while each phrase had fresh material "
+            "and avoids repetition"
+        )
+        segmenter.update(original, now=1)
+        self.assertEqual(
+            segmenter.update(original, now=11).commits[0].text,
+            original,
+        )
+
+        revised = segmenter.update(
+            "recognition continues while each phrase adds fresh material "
+            "and avoids repetition before the next idea",
+            now=12,
+        )
+
+        self.assertEqual(revised.commits, ())
+        self.assertEqual(revised.active, "before the next idea")
+
+    def test_empty_update_resets_consumed_position_and_timer(self) -> None:
+        segmenter = Segmenter(max_chars=500, max_seconds=10)
+        segmenter.update("old partial", now=1)
+        segmenter.update("", now=2)
+
+        update = segmenter.update("new partial", now=20)
+
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "new partial")
+
+    def test_short_unrelated_revision_starts_a_new_timer(self) -> None:
+        segmenter = Segmenter(max_chars=500, max_seconds=10)
+        segmenter.update("okay", now=1)
+        segmenter.update("okay", now=11)
+
+        update = segmenter.update("nope", now=22)
+
+        self.assertEqual(update.commits, ())
+        self.assertEqual(update.active, "nope")
 
     def test_soft_limit_waits_for_forward_punctuation(self) -> None:
         segmenter = Segmenter(
@@ -1321,6 +1402,33 @@ class CaptureLifecycleTests(unittest.TestCase):
         self.assertIs(app.config, new_config)
         self.assertIn("status:正在应用设置并重启识别…", events)
 
+    def test_recognizer_restart_commits_the_last_active_segment(self) -> None:
+        commits: list[tuple[str, bool]] = []
+        app = SimpleNamespace(
+            capturing=True,
+            capture_paused=False,
+            auto_standby=False,
+            model_loaded=True,
+            restart_after_stop=True,
+            asr_error_message="",
+            closing=False,
+            segmenter=SimpleNamespace(
+                flush=lambda forced: SimpleNamespace(
+                    commits=(SimpleNamespace(text="last active segment"),)
+                )
+            ),
+            overlay=SimpleNamespace(set_capturing=lambda value: None),
+            capture_action=SimpleNamespace(setText=lambda text: None),
+            _commit=lambda text, forced: commits.append((text, forced)),
+            _set_status=lambda text: None,
+            start_capture=lambda: None,
+        )
+
+        CaptionApplication._asr_thread_finished(app)
+
+        self.assertEqual(commits, [("last active segment", True)])
+        self.assertFalse(app.restart_after_stop)
+
     def test_changing_silence_minimum_updates_the_running_worker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             old_config = AppConfig()
@@ -1482,6 +1590,7 @@ class AudioAsrTests(unittest.TestCase):
                 SimpleNamespace(text="", endpoint=False),
                 SimpleNamespace(text="ok.", endpoint=False),
                 SimpleNamespace(text="ok. continue", endpoint=False),
+                SimpleNamespace(text="ok. continue", endpoint=False),
             )
         )
         resets: list[bool] = []
@@ -1538,7 +1647,7 @@ class AudioAsrTests(unittest.TestCase):
             worker.run()
 
         self.assertEqual(endpoints, [True])
-        self.assertEqual(resets, [True, True])
+        self.assertEqual(resets, [True])
 
     def test_vad_endpoint_flushes_the_recognizer_so_the_tail_is_committed(self) -> None:
         config = AppConfig()
@@ -1600,6 +1709,121 @@ class AudioAsrTests(unittest.TestCase):
             worker.run()
 
         self.assertIn("complete sentence with tail", partials)
+
+    def test_vad_endpoint_finalizes_before_any_partial_text_exists(self) -> None:
+        config = AppConfig()
+        config.asr.silence_min_chars = 4
+        partials: list[str] = []
+        endpoints: list[bool] = []
+
+        class Recognition:
+            def accept(inner_self, samples):
+                return SimpleNamespace(text="", endpoint=False)
+
+            def finalize(inner_self):
+                worker.stop()
+                return SimpleNamespace(text="short result", endpoint=False)
+
+            def reset(inner_self) -> None:
+                pass
+
+        class SpeechGate:
+            def __init__(inner_self, vad, **kwargs) -> None:
+                pass
+
+            def process(inner_self, samples):
+                return [(samples, True)]
+
+            def reset(inner_self) -> None:
+                pass
+
+        class Capture:
+            name = "test"
+
+            def __enter__(inner_self):
+                return inner_self
+
+            def __exit__(inner_self, *args) -> None:
+                pass
+
+            def read(inner_self, frames):
+                return np.zeros((frames, 1), dtype=np.float32)
+
+        worker = AudioAsrWorker(
+            config,
+            audio_source=SimpleNamespace(
+                capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+                open_default=lambda **kwargs: Capture(),
+            ),
+            recognition_backend=SimpleNamespace(
+                create_streaming=lambda current: Recognition(),
+                create_vad=lambda current: object(),
+            ),
+        )
+        worker.partial.connect(lambda text, revision: partials.append(text))
+        worker.endpoint.connect(lambda: endpoints.append(True))
+
+        with patch("captions.audio_asr.VadSpeechGate", SpeechGate):
+            worker.run()
+
+        self.assertEqual(partials, ["short result"])
+        self.assertEqual(endpoints, [True])
+
+    def test_flush_asr_endpoint_bypasses_the_vad_minimum(self) -> None:
+        config = AppConfig()
+        config.asr.silence_min_chars = 20
+        endpoints: list[bool] = []
+
+        class Recognition:
+            def accept(inner_self, samples):
+                return SimpleNamespace(text="", endpoint=False)
+
+            def finalize(inner_self):
+                worker.stop()
+                return SimpleNamespace(text="ok", endpoint=True)
+
+            def reset(inner_self) -> None:
+                pass
+
+        class SpeechGate:
+            def __init__(inner_self, vad, **kwargs) -> None:
+                pass
+
+            def process(inner_self, samples):
+                return [(samples, True)]
+
+            def reset(inner_self) -> None:
+                pass
+
+        class Capture:
+            name = "test"
+
+            def __enter__(inner_self):
+                return inner_self
+
+            def __exit__(inner_self, *args) -> None:
+                pass
+
+            def read(inner_self, frames):
+                return np.zeros((frames, 1), dtype=np.float32)
+
+        worker = AudioAsrWorker(
+            config,
+            audio_source=SimpleNamespace(
+                capture_kind=AudioCaptureKind.SYSTEM_OUTPUT,
+                open_default=lambda **kwargs: Capture(),
+            ),
+            recognition_backend=SimpleNamespace(
+                create_streaming=lambda current: Recognition(),
+                create_vad=lambda current: object(),
+            ),
+        )
+        worker.endpoint.connect(lambda: endpoints.append(True))
+
+        with patch("captions.audio_asr.VadSpeechGate", SpeechGate):
+            worker.run()
+
+        self.assertEqual(endpoints, [True])
 
 
     def test_streaming_recognition_hides_sherpa_stream_operations(self) -> None:

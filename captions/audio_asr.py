@@ -225,7 +225,8 @@ class AudioAsrWorker(QObject):
                             for speech, vad_endpoint in speech_gate.process(mono):
                                 update = recognition.accept(speech)
                                 text = update.text
-                                if vad_endpoint and text.strip():
+                                asr_endpoint = update.endpoint
+                                if vad_endpoint:
                                     finalize = getattr(recognition, "finalize", None)
                                     flush = (
                                         finalize()
@@ -239,6 +240,9 @@ class AudioAsrWorker(QObject):
                                     )
                                     if flush.text:
                                         text = flush.text
+                                    asr_endpoint = asr_endpoint or bool(
+                                        getattr(flush, "endpoint", False)
+                                    )
                                 if text != last_text:
                                     revision += 1
                                     last_text = text
@@ -251,14 +255,14 @@ class AudioAsrWorker(QObject):
                                 commit_endpoint = should_commit_endpoint(
                                     text,
                                     vad_endpoint=vad_endpoint,
-                                    asr_endpoint=update.endpoint,
+                                    asr_endpoint=asr_endpoint,
                                     silence_min_chars=self._silence_min_chars,
                                 )
                                 if commit_endpoint:
                                     self.diagnostics.event(
                                         "asr.endpoint",
                                         revision=revision,
-                                        reason="asr" if update.endpoint else "vad",
+                                        reason="asr" if asr_endpoint else "vad",
                                         text=text,
                                     )
                                     self.endpoint.emit()
