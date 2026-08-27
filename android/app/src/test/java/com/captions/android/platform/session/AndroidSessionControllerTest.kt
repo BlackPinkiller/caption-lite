@@ -2,6 +2,7 @@ package com.captions.android.platform.session
 
 import com.captions.android.core.session.AppearanceSettings
 import com.captions.android.core.recognition.RecognitionSegmenter
+import com.captions.android.core.recognition.PunctuationMode
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.TranslationSettings
@@ -79,7 +80,7 @@ class AndroidSessionControllerTest {
     }
 
     @Test
-    fun splitPunctuationToggleReachesTheSegmenter() {
+    fun punctuationModeReachesTheLiveSegmenter() {
         val segmenter = RecognitionSegmenter()
         val controller = AndroidSessionController(
             FakeAudioInput(),
@@ -87,10 +88,10 @@ class AndroidSessionControllerTest {
             segmenter = segmenter,
         )
 
-        assertTrue(segmenter.splitPunctuation)
-        controller.setSplitPunctuation(false)
+        assertEquals(PunctuationMode.Off, segmenter.punctuationMode)
+        controller.setPunctuationMode(PunctuationMode.All)
 
-        assertFalse(segmenter.splitPunctuation)
+        assertEquals(PunctuationMode.All, segmenter.punctuationMode)
     }
 
     @Test
@@ -232,7 +233,10 @@ class AndroidSessionControllerTest {
             viewModel = viewModel,
             recognitionSession = recognition,
             translationSession = translation,
-            segmenter = RecognitionSegmenter(nowMillis = { 1_000L }),
+            segmenter = RecognitionSegmenter(
+                punctuationMode = PunctuationMode.Sentence,
+                nowMillis = { 1_000L },
+            ),
         )
         controller.start()
         recognition.ready()
@@ -434,9 +438,9 @@ class AndroidSessionControllerTest {
 
         override fun saveNemotronModel(model: NemotronModel) = Unit
 
-        override fun loadSplitPunctuation(): Boolean = true
+        override fun loadPunctuationMode(): PunctuationMode = PunctuationMode.Off
 
-        override fun saveSplitPunctuation(enabled: Boolean) = Unit
+        override fun savePunctuationMode(mode: PunctuationMode) = Unit
 
         override fun loadTranslation(): TranslationSettings = TranslationSettings()
 

@@ -53,6 +53,7 @@ import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationEngine
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.recognition.PunctuationMode
 import com.captions.android.ports.ModelPhase
 import com.captions.android.ports.ModelState
 
@@ -67,7 +68,7 @@ fun SettingsScreen(
     onRecognitionEngineChanged: (RecognitionEngine) -> Unit,
     onNemotronModelChanged: (NemotronModel) -> Unit,
     onRecognitionLanguageChanged: (String) -> Unit,
-    onSplitPunctuationChanged: (Boolean) -> Unit,
+    onPunctuationModeChanged: (PunctuationMode) -> Unit,
     onDownloadModel: () -> Unit,
     onDownloadSystemModel: () -> Unit,
     onTranslationSettingsChanged: (TranslationSettings) -> Unit,
@@ -159,12 +160,12 @@ fun SettingsScreen(
                 )
                 SettingsDestination.Captions -> CaptionSettingsPage(
                     displayMode = state.displayMode,
-                    splitPunctuation = state.splitPunctuation,
+                    punctuationMode = state.punctuationMode,
                     overlayEnabled = state.overlayEnabled,
                     backgroundEnabled = state.overlayBackgroundEnabled,
                     overlayPosition = state.overlayPosition,
                     onDisplayModeChanged = onDisplayModeChanged,
-                    onSplitPunctuationChanged = onSplitPunctuationChanged,
+                    onPunctuationModeChanged = onPunctuationModeChanged,
                     onOverlayEnabledChanged = onOverlayEnabledChanged,
                     onOverlayBackgroundChanged = onOverlayBackgroundChanged,
                     onOverlayPositionChanged = onOverlayPositionChanged,

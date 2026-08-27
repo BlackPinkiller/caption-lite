@@ -14,16 +14,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.OverlayPosition
+import com.captions.android.core.recognition.PunctuationMode
 
 @Composable
 internal fun CaptionSettingsPage(
     displayMode: DisplayMode,
-    splitPunctuation: Boolean,
+    punctuationMode: PunctuationMode,
     overlayEnabled: Boolean,
     backgroundEnabled: Boolean,
     overlayPosition: OverlayPosition,
     onDisplayModeChanged: (DisplayMode) -> Unit,
-    onSplitPunctuationChanged: (Boolean) -> Unit,
+    onPunctuationModeChanged: (PunctuationMode) -> Unit,
     onOverlayEnabledChanged: (Boolean) -> Unit,
     onOverlayBackgroundChanged: (Boolean) -> Unit,
     onOverlayPositionChanged: (OverlayPosition) -> Unit,
@@ -42,11 +43,15 @@ internal fun CaptionSettingsPage(
             )
         }
         SettingGroup(label = "分句") {
-            ToggleSetting(
-                label = "标点分句",
-                supportingText = "句号、问号、感叹号处即时成句",
-                checked = splitPunctuation,
-                onCheckedChange = onSplitPunctuationChanged,
+            SegmentedChoiceRow(
+                choices = listOf(
+                    PunctuationMode.Off to "关闭",
+                    PunctuationMode.Sentence to "句末",
+                    PunctuationMode.All to "所有",
+                ),
+                selected = punctuationMode,
+                onSelected = onPunctuationModeChanged,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
         SettingGroup(label = "悬浮字幕") {

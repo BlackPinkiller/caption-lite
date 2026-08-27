@@ -1,5 +1,6 @@
 package com.captions.android.core.session
 
+import com.captions.android.core.recognition.PunctuationMode
 import com.captions.android.ports.SettingsStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -65,15 +66,15 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `split punctuation toggle updates state and persists`() {
+    fun `punctuation mode defaults off and persists all choices`() {
         val settings = MemorySettingsStore()
         val store = SessionStore(settings)
 
-        assertTrue(store.state.value.splitPunctuation)
-        store.setSplitPunctuation(false)
+        assertEquals(PunctuationMode.Off, store.state.value.punctuationMode)
+        store.setPunctuationMode(PunctuationMode.All)
 
-        assertFalse(store.state.value.splitPunctuation)
-        assertFalse(settings.splitPunctuation)
+        assertEquals(PunctuationMode.All, store.state.value.punctuationMode)
+        assertEquals(PunctuationMode.All, settings.punctuationMode)
     }
 
     @Test
@@ -92,7 +93,7 @@ class SessionStoreTest {
         var translation: TranslationSettings = TranslationSettings(),
     ) : SettingsStore {
         var appearance = AppearanceSettings()
-        var splitPunctuation = true
+        var punctuationMode = PunctuationMode.Off
         var nemotronModel = NemotronModel.English560Ms
 
         override fun loadAppearance(): AppearanceSettings = appearance
@@ -113,10 +114,10 @@ class SessionStoreTest {
             nemotronModel = model
         }
 
-        override fun loadSplitPunctuation(): Boolean = splitPunctuation
+        override fun loadPunctuationMode(): PunctuationMode = punctuationMode
 
-        override fun saveSplitPunctuation(enabled: Boolean) {
-            splitPunctuation = enabled
+        override fun savePunctuationMode(mode: PunctuationMode) {
+            punctuationMode = mode
         }
 
         override fun loadTranslation(): TranslationSettings = translation

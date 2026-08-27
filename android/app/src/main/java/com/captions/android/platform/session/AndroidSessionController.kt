@@ -3,6 +3,7 @@ package com.captions.android.platform.session
 import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.core.recognition.RecognitionSegmenter
+import com.captions.android.core.recognition.PunctuationMode
 import com.captions.android.ports.AudioInput
 import com.captions.android.ports.DirectRecognitionSession
 import com.captions.android.ports.RecognitionController
@@ -23,8 +24,8 @@ class AndroidSessionController(
     private val startRequested = AtomicBoolean(false)
     private var cueId = 1L
 
-    fun setSplitPunctuation(enabled: Boolean) {
-        segmenter.splitPunctuation = enabled
+    fun setPunctuationMode(mode: PunctuationMode) {
+        segmenter.punctuationMode = mode
     }
 
     override fun start() {

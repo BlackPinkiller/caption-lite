@@ -9,8 +9,20 @@ import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.TranslationSettings
 import com.captions.android.core.session.TranslationEngine
+import com.captions.android.core.recognition.PunctuationMode
 import com.captions.android.ports.SettingsStore
 import com.captions.android.platform.security.AndroidSecretStore
+
+internal fun resolvePunctuationMode(
+    storedMode: String?,
+    legacyEnabled: Boolean?,
+): PunctuationMode {
+    if (storedMode != null) {
+        return runCatching { enumValueOf<PunctuationMode>(storedMode) }
+            .getOrDefault(PunctuationMode.Off)
+    }
+    return if (legacyEnabled == true) PunctuationMode.Sentence else PunctuationMode.Off
+}
 
 class AndroidSettingsStore(context: Context) : SettingsStore {
     private val preferences = context.getSharedPreferences("captions_settings", Context.MODE_PRIVATE)
@@ -65,11 +77,19 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         preferences.edit().putString(KEY_NEMOTRON_MODEL, model.name).apply()
     }
 
-    override fun loadSplitPunctuation(): Boolean =
-        preferences.getBoolean(KEY_SPLIT_PUNCTUATION, true)
+    override fun loadPunctuationMode(): PunctuationMode {
+        val stored = preferences.getString(KEY_PUNCTUATION_MODE, null)
+        val legacy = if (preferences.contains(KEY_SPLIT_PUNCTUATION)) {
+            preferences.getBoolean(KEY_SPLIT_PUNCTUATION, false)
+        } else null
+        return resolvePunctuationMode(stored, legacy)
+    }
 
-    override fun saveSplitPunctuation(enabled: Boolean) {
-        preferences.edit().putBoolean(KEY_SPLIT_PUNCTUATION, enabled).apply()
+    override fun savePunctuationMode(mode: PunctuationMode) {
+        preferences.edit()
+            .putString(KEY_PUNCTUATION_MODE, mode.name)
+            .remove(KEY_SPLIT_PUNCTUATION)
+            .apply()
     }
 
     override fun loadTranslation(): TranslationSettings = TranslationSettings(
@@ -125,6 +145,7 @@ class AndroidSettingsStore(context: Context) : SettingsStore {
         const val KEY_OVERLAY_POSITION = "overlay_position"
         const val KEY_RECOGNITION_ENGINE = "recognition_engine"
         const val KEY_NEMOTRON_MODEL = "nemotron_model"
+        const val KEY_PUNCTUATION_MODE = "punctuation_mode"
         const val KEY_SPLIT_PUNCTUATION = "split_punctuation"
         const val KEY_TRANSLATION_ENABLED = "translation_enabled"
         const val KEY_TRANSLATION_ENGINE = "translation_engine"

@@ -7,6 +7,7 @@ import com.captions.android.core.session.RecognitionEngine
 import com.captions.android.core.session.NemotronModel
 import com.captions.android.core.session.SessionUiState
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.recognition.PunctuationMode
 import kotlinx.coroutines.flow.StateFlow
 
 interface SessionStateController {
@@ -25,7 +26,7 @@ interface SessionStateController {
     fun setOverlayPosition(position: OverlayPosition)
     fun setRecognitionEngine(engine: RecognitionEngine)
     fun setNemotronModel(model: NemotronModel)
-    fun setSplitPunctuation(enabled: Boolean)
+    fun setPunctuationMode(mode: PunctuationMode)
     fun setTranslationSettings(settings: TranslationSettings)
     fun showMessage(message: String)
     fun updateCurrent(cueId: Long, source: String, translation: String? = null)

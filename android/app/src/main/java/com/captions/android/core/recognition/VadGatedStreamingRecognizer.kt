@@ -5,15 +5,24 @@ import com.captions.android.ports.StreamingRecognizer
 
 /**
  * Wraps a streaming recognizer with a [VadGate] so the recognizer only receives
- * audio around confirmed speech and sentence boundaries come from the VAD
- * (fast, precise) instead of the recognizer's own endpoint detection, which
- * fires late enough to swallow the start of the next sentence.
+ * audio around confirmed speech. A VAD endpoint commits only after the minimum
+ * text floor, while an explicit recognizer endpoint always commits.
  */
 class VadGatedStreamingRecognizer(
     private val recognizer: StreamingRecognizer,
     private val gate: VadGate,
+    private val minCommitChars: Int = 4,
 ) : StreamingRecognizer {
+    private var endpointResetPending = false
+
     override fun reset() {
+        // QueuedRecognitionSession resets after every surfaced endpoint. The
+        // inner recognizer was already reset at the exact event boundary, so
+        // keep any later onset that VadGate found in the same audio chunk.
+        if (endpointResetPending) {
+            endpointResetPending = false
+            return
+        }
         gate.reset()
         recognizer.reset()
     }
@@ -23,11 +32,29 @@ class VadGatedStreamingRecognizer(
         var endpoint = false
         for (audio in gate.process(samples)) {
             val update = recognizer.accept(audio.samples)
-            if (update.text.isNotEmpty()) text = update.text
+            var currentText = update.text.ifEmpty { text }
+            var asrEndpoint = update.endpoint
             if (audio.vadEndpoint) {
                 val flushed = recognizer.accept(ShortArray(VAD_FLUSH_SAMPLES))
-                if (flushed.text.isNotEmpty()) text = flushed.text
+                if (flushed.text.isNotEmpty()) currentText = flushed.text
+                asrEndpoint = asrEndpoint || flushed.endpoint
+            }
+            if (
+                !endpoint &&
+                SegmentationRules.shouldCommitEndpoint(
+                    text = currentText,
+                    vadEndpoint = audio.vadEndpoint,
+                    asrEndpoint = asrEndpoint,
+                    minChars = minCommitChars,
+                )
+            ) {
+                text = currentText
                 endpoint = true
+                recognizer.reset()
+                endpointResetPending = true
+            } else if (!endpoint) {
+                text = currentText
+                if (audio.vadEndpoint && currentText.isBlank()) recognizer.reset()
             }
         }
         return RecognitionUpdate(text = text, endpoint = endpoint)

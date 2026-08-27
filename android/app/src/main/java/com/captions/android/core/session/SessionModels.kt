@@ -1,5 +1,7 @@
 package com.captions.android.core.session
 
+import com.captions.android.core.recognition.PunctuationMode
+
 enum class DisplayMode {
     Bilingual,
     Source,
@@ -89,7 +91,7 @@ data class SessionUiState(
     val overlayPosition: OverlayPosition = OverlayPosition.Bottom,
     val recognitionEngine: RecognitionEngine = RecognitionEngine.Nemotron,
     val nemotronModel: NemotronModel = NemotronModel.English560Ms,
-    val splitPunctuation: Boolean = true,
+    val punctuationMode: PunctuationMode = PunctuationMode.Off,
     val translationSettings: TranslationSettings = TranslationSettings(),
     val entries: List<SessionEntry> = emptyList(),
     val message: String = "",

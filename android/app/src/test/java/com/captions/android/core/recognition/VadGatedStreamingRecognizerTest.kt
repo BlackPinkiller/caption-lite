@@ -3,12 +3,13 @@ package com.captions.android.core.recognition
 import com.captions.android.ports.RecognitionUpdate
 import com.captions.android.ports.StreamingRecognizer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VadGatedStreamingRecognizerTest {
     @Test
-    fun surfacesTheVadEndpointWithoutWaitingForTheRecognizerEndpoint() {
+    fun emptyVadEndpointDoesNotCreateAnEmptyCommit() {
         val inner = RecordingRecognizer() // the recognizer itself never reports an endpoint
         val gate = VadGate(
             StateVad(listOf(true, true, true, false, false, false, true)),
@@ -18,7 +19,33 @@ class VadGatedStreamingRecognizerTest {
 
         val update = wrapped.accept(ShortArray(7 * 4) { it.toShort() })
 
-        assertTrue("VAD endpoint was not surfaced", update.endpoint)
+        assertFalse(update.endpoint)
+        assertEquals("", update.text)
+    }
+
+    @Test
+    fun shortVadEndpointKeepsRecognitionOpenUntilTheMinimumIsReached() {
+        val inner = RecordingRecognizer(text = "ok")
+        val gate = VadGate(StateVad(listOf(true, false)), windowSize = 4)
+        val wrapped = VadGatedStreamingRecognizer(inner, gate, minCommitChars = 4)
+
+        val update = wrapped.accept(ShortArray(8) { it.toShort() })
+
+        assertFalse(update.endpoint)
+        assertEquals("ok", update.text)
+        assertEquals(0, inner.resetCount)
+    }
+
+    @Test
+    fun recognizerEndpointBypassesTheMinimum() {
+        val inner = RecordingRecognizer(text = "ok", endpoint = true)
+        val gate = VadGate(StateVad(listOf(true)), windowSize = 4)
+        val wrapped = VadGatedStreamingRecognizer(inner, gate, minCommitChars = 4)
+
+        val update = wrapped.accept(ShortArray(4) { it.toShort() })
+
+        assertTrue(update.endpoint)
+        assertEquals("ok", update.text)
     }
 
     @Test
@@ -33,6 +60,19 @@ class VadGatedStreamingRecognizerTest {
 
         assertTrue(inner.received.any { chunk -> chunk.any { it.toInt() >= 8 } })
         assertEquals("recognized", update.text)
+    }
+
+    @Test
+    fun keepsTheNextOnsetWhenItSharesAChunkWithTheEndpoint() {
+        val inner = RecordingRecognizer(text = "recognized")
+        val gate = VadGate(StateVad(listOf(true, false, true)), windowSize = 4)
+        val wrapped = VadGatedStreamingRecognizer(inner, gate)
+
+        val update = wrapped.accept(ShortArray(12) { it.toShort() })
+        wrapped.reset()
+
+        assertTrue(update.endpoint)
+        assertTrue(inner.received.any { chunk -> chunk.any { it.toInt() >= 8 } })
     }
 
     @Test
@@ -77,16 +117,19 @@ class VadGatedStreamingRecognizerTest {
 
     private class RecordingRecognizer(
         private val text: String = "",
+        private val endpoint: Boolean = false,
     ) : StreamingRecognizer {
         val received = mutableListOf<ShortArray>()
+        var resetCount = 0
 
         override fun reset() {
+            resetCount += 1
             received.clear()
         }
 
         override fun accept(samples: ShortArray): RecognitionUpdate {
             received += samples
-            return RecognitionUpdate(text = text, endpoint = false)
+            return RecognitionUpdate(text = text, endpoint = endpoint)
         }
 
         override fun close() = Unit

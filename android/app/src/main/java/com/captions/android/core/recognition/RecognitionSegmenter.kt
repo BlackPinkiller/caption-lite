@@ -10,6 +10,12 @@ data class SegmentUpdate(
     val commits: List<SegmentCommit> = emptyList(),
 )
 
+enum class PunctuationMode {
+    Off,
+    Sentence,
+    All,
+}
+
 object SegmentationRules {
     fun shouldCommitEndpoint(
         text: String,
@@ -27,13 +33,14 @@ class RecognitionSegmenter(
     var maxDurationMillis: Long = 20_000L,
     var splitLookbackChars: Int = 32,
     var splitLookaheadChars: Int = 160,
-    var splitPunctuation: Boolean = true,
+    var punctuationMode: PunctuationMode = PunctuationMode.Off,
     var minCommitChars: Int = 4,
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     private var raw = ""
     private var consumed = 0
     private var startedAt = 0L
+    private var pendingWeakBoundary = ""
 
     val active: String
         get() = raw.substring(activeStart())
@@ -42,18 +49,20 @@ class RecognitionSegmenter(
         raw = ""
         consumed = 0
         startedAt = 0L
+        pendingWeakBoundary = ""
     }
 
     fun update(value: String): SegmentUpdate {
         val now = nowMillis()
         val normalized = value.trim().split(WHITESPACE).filter(String::isNotEmpty).joinToString(" ")
         if (normalized.isEmpty()) {
-            raw = ""
+            reset()
             return SegmentUpdate("")
         }
         if (startedAt == 0L) startedAt = now
         if (consumed > 0 && !normalized.startsWith(raw.take(consumed))) {
             val reconciled = reconcileConsumed(raw.take(consumed), normalized)
+            pendingWeakBoundary = ""
             if (reconciled == null) {
                 reset()
                 startedAt = now
@@ -64,19 +73,19 @@ class RecognitionSegmenter(
         raw = normalized
         val commits = mutableListOf<SegmentCommit>()
 
-        if (splitPunctuation) {
+        if (punctuationMode != PunctuationMode.Off) {
             while (true) {
                 val current = active
-                val boundary = nextBoundary(current)
-                if (boundary == null) break
+                val boundary = nextBoundary(current) ?: break
                 val committed = current.substring(0, boundary).trim()
                 consumed = activeStart() + boundary
                 startedAt = now
+                pendingWeakBoundary = ""
                 commits += SegmentCommit(committed)
             }
         }
 
-        val current = active
+        var current = active
         if (current.isEmpty()) return SegmentUpdate("", commits)
 
         if (maxDurationMillis > 0 && now - startedAt >= maxDurationMillis) {
@@ -87,12 +96,13 @@ class RecognitionSegmenter(
             return SegmentUpdate(active, commits)
         }
 
-        if (current.length > maxChars) {
-            val decision = windowSplit(current) ?: return SegmentUpdate(current, commits)
+        while (current.length > maxChars) {
+            val decision = windowSplit(current) ?: break
             val committed = current.substring(0, decision.index).trim()
             consumed = activeStart() + decision.index
             startedAt = now
             commits += SegmentCommit(committed, decision.forced)
+            current = active
         }
         return SegmentUpdate(active, commits)
     }
@@ -114,10 +124,26 @@ class RecognitionSegmenter(
         val floor = maxOf(1, minCommitChars)
         for (match in TERMINAL_PUNCTUATION.findAll(text)) {
             if (isAbbreviation(text, match.range.first)) continue
-            val end = match.range.last + 1
+            val end = terminalBoundaryEnd(text, match) ?: continue
             if (text.substring(0, end).trim().length < floor) continue
+            pendingWeakBoundary = ""
             return end
         }
+
+        if (punctuationMode == PunctuationMode.All) {
+            for (match in WEAK_PUNCTUATION.findAll(text)) {
+                val matchEnd = match.range.last + 1
+                val end = withClosingPunctuation(text, matchEnd)
+                if (text.substring(0, end).trim().length < floor) continue
+                if (isNumericSeparator(text, match.range.first, matchEnd)) continue
+                val candidate = text.substring(0, end).trim()
+                val stable = candidate == pendingWeakBoundary
+                pendingWeakBoundary = candidate
+                if (stable) return end
+                return null
+            }
+        }
+        pendingWeakBoundary = ""
         return null
     }
 
@@ -131,6 +157,23 @@ class RecognitionSegmenter(
         return token.lowercase() in ABBREVIATIONS
     }
 
+    private fun withClosingPunctuation(text: String, initialEnd: Int): Int {
+        var end = initialEnd
+        while (end < text.length && text[end] in CLOSING_PUNCTUATION) end += 1
+        return end
+    }
+
+    private fun terminalBoundaryEnd(text: String, match: MatchResult): Int? {
+        val end = withClosingPunctuation(text, match.range.last + 1)
+        if (text[match.range.first] in ASCII_TERMINAL && end < text.length) {
+            if (!text[end].isWhitespace()) return null
+        }
+        return end
+    }
+
+    private fun isNumericSeparator(text: String, start: Int, end: Int): Boolean =
+        start > 0 && end < text.length && text[start - 1].isDigit() && text[end].isDigit()
+
     private fun windowSplit(text: String): SplitDecision? {
         val soft = maxOf(1, maxChars)
         val lookback = maxOf(0, splitLookbackChars)
@@ -138,17 +181,27 @@ class RecognitionSegmenter(
         val hard = soft + lookahead
         val start = maxOf(0, soft - lookback)
         val end = minOf(text.length, hard)
-        val window = text.substring(start, end)
-        val punctuation = mutableListOf<MatchResult>()
-        if (splitPunctuation) {
-            punctuation += TERMINAL_PUNCTUATION.findAll(window)
-                .filter { !isAbbreviation(text, start + it.range.first) }
-                .toList()
+        val punctuation = mutableListOf<Pair<Int, Int>>()
+        if (punctuationMode != PunctuationMode.Off) {
+            for (match in TERMINAL_PUNCTUATION.findAll(text, start)) {
+                if (match.range.first >= end) break
+                if (isAbbreviation(text, match.range.first)) continue
+                val boundary = terminalBoundaryEnd(text, match)
+                if (boundary != null) punctuation += match.range.first to boundary
+            }
+            if (punctuationMode == PunctuationMode.All) {
+                for (match in WEAK_PUNCTUATION.findAll(text, start)) {
+                    if (match.range.first >= end) break
+                    val matchEnd = match.range.last + 1
+                    if (isNumericSeparator(text, match.range.first, matchEnd)) continue
+                    punctuation += match.range.first to withClosingPunctuation(text, matchEnd)
+                }
+            }
+            punctuation.sortBy { it.first }
         }
         if (punctuation.isNotEmpty()) {
-            val selected = punctuation.firstOrNull { start + it.range.last + 1 >= soft }
-                ?: punctuation.last()
-            return SplitDecision(start + selected.range.last + 1, forced = false)
+            val selected = punctuation.firstOrNull { it.second >= soft } ?: punctuation.last()
+            return SplitDecision(selected.second, forced = false)
         }
         if (text.length < hard) return null
         val floor = maxOf(0, hard - lookback)
@@ -177,14 +230,23 @@ class RecognitionSegmenter(
             compareBy<Int> { distances[it] }.thenBy { kotlin.math.abs(it - previous.length) },
         ) ?: return null
         val allowedChanges = maxOf(MIN_RECONCILE_CHANGES, previous.length / 3)
-        return bestIndex.takeIf { distances[it] <= allowedChanges }
+        val distance = distances[bestIndex]
+        return bestIndex.takeIf {
+            it > 0 && distance < maxOf(previous.length, it) && distance <= allowedChanges
+        }
     }
 
     private data class SplitDecision(val index: Int, val forced: Boolean)
 
     private companion object {
         val WHITESPACE = Regex("\\s+")
-        val TERMINAL_PUNCTUATION = Regex("[。？！]|[.?!](?=\\s|$)")
+        val TERMINAL_PUNCTUATION = Regex("[。？！…]|[.?!]+")
+        val WEAK_PUNCTUATION = Regex("[,，、;；:：]")
+        val CLOSING_PUNCTUATION = setOf(
+            '\"', '\'', '”', '’', '»', '」', '』', '】', '》', '）', '〕', '〗', '〙', '〛',
+            ')', ']', '}',
+        )
+        val ASCII_TERMINAL = setOf('.', '?', '!')
         const val MIN_RECONCILE_CHANGES = 4
         val ABBREVIATIONS = setOf(
             "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",

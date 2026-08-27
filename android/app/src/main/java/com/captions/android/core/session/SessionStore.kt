@@ -2,6 +2,7 @@ package com.captions.android.core.session
 
 import com.captions.android.ports.SessionStateController
 import com.captions.android.ports.SettingsStore
+import com.captions.android.core.recognition.PunctuationMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +26,7 @@ class SessionStore(
                 overlayPosition = it.overlayPosition,
                 recognitionEngine = initialRecognitionEngine,
                 nemotronModel = settingsStore.loadNemotronModel(),
-                splitPunctuation = settingsStore.loadSplitPunctuation(),
+                punctuationMode = settingsStore.loadPunctuationMode(),
                 translationSettings = initialTranslationSettings,
             )
         },
@@ -112,12 +113,12 @@ class SessionStore(
         settingsStore.saveNemotronModel(model)
     }
 
-    override fun setSplitPunctuation(enabled: Boolean) {
+    override fun setPunctuationMode(mode: PunctuationMode) {
         mutableState.value = mutableState.value.copy(
-            splitPunctuation = enabled,
+            punctuationMode = mode,
             message = "",
         )
-        settingsStore.saveSplitPunctuation(enabled)
+        settingsStore.savePunctuationMode(mode)
     }
 
     override fun setTranslationSettings(settings: TranslationSettings) {

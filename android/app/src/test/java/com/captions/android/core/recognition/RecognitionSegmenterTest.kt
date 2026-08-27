@@ -8,7 +8,10 @@ import org.junit.Test
 class RecognitionSegmenterTest {
     @Test
     fun `trailing punctuation commits immediately`() {
-        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("Hello world.")
 
@@ -19,7 +22,10 @@ class RecognitionSegmenterTest {
 
     @Test
     fun `mid text boundary commits and keeps the tail active`() {
-        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("One. Two")
 
@@ -29,7 +35,10 @@ class RecognitionSegmenterTest {
 
     @Test
     fun `multiple boundaries commit each sentence as its own cue`() {
-        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("One. Two. Three")
 
@@ -39,7 +48,11 @@ class RecognitionSegmenterTest {
 
     @Test
     fun `short fragment below the floor stays active`() {
-        val segmenter = RecognitionSegmenter(minCommitChars = 4, nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            minCommitChars = 4,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("ok.")
 
@@ -49,7 +62,10 @@ class RecognitionSegmenterTest {
 
     @Test
     fun `abbreviation period is not a boundary`() {
-        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("Mr. Smith is here")
 
@@ -59,7 +75,10 @@ class RecognitionSegmenterTest {
 
     @Test
     fun `abbreviation followed by a later boundary skips the initial`() {
-        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
 
         val update = segmenter.update("Mr. Smith is here. Next")
 
@@ -68,8 +87,8 @@ class RecognitionSegmenterTest {
     }
 
     @Test
-    fun `punctuation disabled defers to silence and limits`() {
-        val segmenter = RecognitionSegmenter(splitPunctuation = false, nowMillis = { 1_000L })
+    fun `punctuation is disabled by default`() {
+        val segmenter = RecognitionSegmenter(nowMillis = { 1_000L })
 
         val update = segmenter.update("Hello world. More")
 
@@ -99,6 +118,7 @@ class RecognitionSegmenterTest {
             maxChars = 20,
             splitLookbackChars = 4,
             splitLookaheadChars = 20,
+            punctuationMode = PunctuationMode.Sentence,
             nowMillis = { 1_000L },
         )
 
@@ -206,11 +226,31 @@ class RecognitionSegmenterTest {
     }
 
     @Test
+    fun `short unrelated revision starts a new timer`() {
+        var now = 1_000L
+        val segmenter = RecognitionSegmenter(
+            maxChars = 500,
+            maxDurationMillis = 10_000L,
+            nowMillis = { now },
+        )
+        segmenter.update("okay")
+        now = 11_000L
+        segmenter.update("okay")
+        now = 22_000L
+
+        val update = segmenter.update("nope")
+
+        assertTrue(update.commits.isEmpty())
+        assertEquals("nope", update.active)
+    }
+
+    @Test
     fun `chinese punctuation can split continuous text`() {
         val segmenter = RecognitionSegmenter(
             maxChars = 4,
             splitLookbackChars = 1,
             splitLookaheadChars = 8,
+            punctuationMode = PunctuationMode.Sentence,
             nowMillis = { 1_000L },
         )
 
@@ -219,5 +259,110 @@ class RecognitionSegmenterTest {
         assertEquals(listOf("这是第一句。"), update.commits.map { it.text })
         assertEquals("这是第二句", update.active)
         assertFalse(update.commits.first().forced)
+    }
+
+    @Test
+    fun `sentence boundary keeps closing punctuation`() {
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
+
+        val english = segmenter.update("He said \"Hello.\" Next")
+        segmenter.reset()
+        val chinese = segmenter.update("他说“你好。”然后继续")
+
+        assertEquals(listOf("He said \"Hello.\""), english.commits.map { it.text })
+        assertEquals("Next", english.active)
+        assertEquals(listOf("他说“你好。”"), chinese.commits.map { it.text })
+        assertEquals("然后继续", chinese.active)
+    }
+
+    @Test
+    fun `unicode ellipsis is a sentence boundary`() {
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.Sentence,
+            nowMillis = { 1_000L },
+        )
+
+        val update = segmenter.update("Wait… Next")
+
+        assertEquals(listOf("Wait…"), update.commits.map { it.text })
+        assertEquals("Next", update.active)
+    }
+
+    @Test
+    fun `all punctuation confirms a weak boundary before committing`() {
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.All,
+            nowMillis = { 1_000L },
+        )
+
+        val first = segmenter.update("Alpha, beta")
+        val stable = segmenter.update("Alpha, beta continues")
+
+        assertTrue(first.commits.isEmpty())
+        assertEquals(listOf("Alpha,"), stable.commits.map { it.text })
+        assertEquals("beta continues", stable.active)
+    }
+
+    @Test
+    fun `all punctuation does not split numeric separators`() {
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.All,
+            nowMillis = { 1_000L },
+        )
+
+        segmenter.update("Value 1,234 remains")
+        val update = segmenter.update("Value 1,234 remains stable")
+
+        assertTrue(update.commits.isEmpty())
+    }
+
+    @Test
+    fun `each identical weak boundary requires its own confirmation`() {
+        val segmenter = RecognitionSegmenter(
+            punctuationMode = PunctuationMode.All,
+            nowMillis = { 1_000L },
+        )
+        segmenter.update("word, word")
+
+        val update = segmenter.update("word, word, tail")
+
+        assertEquals(listOf("word,"), update.commits.map { it.text })
+        assertEquals("word, tail", update.active)
+    }
+
+    @Test
+    fun `one large update splits until the tail is below the hard limit`() {
+        val segmenter = RecognitionSegmenter(
+            maxChars = 20,
+            splitLookbackChars = 4,
+            splitLookaheadChars = 5,
+            nowMillis = { 1_000L },
+        )
+
+        val update = segmenter.update("x".repeat(80))
+
+        assertEquals(listOf(25, 25, 25), update.commits.map { it.text.length })
+        assertEquals("x".repeat(5), update.active)
+    }
+
+    @Test
+    fun `empty update resets the consumed position and timer`() {
+        var now = 1_000L
+        val segmenter = RecognitionSegmenter(
+            maxChars = 500,
+            maxDurationMillis = 10_000L,
+            nowMillis = { now },
+        )
+        segmenter.update("old partial")
+        segmenter.update("")
+        now = 20_000L
+
+        val update = segmenter.update("new partial")
+
+        assertTrue(update.commits.isEmpty())
+        assertEquals("new partial", update.active)
     }
 }

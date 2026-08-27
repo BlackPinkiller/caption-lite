@@ -64,7 +64,7 @@ class AndroidAppRuntime(context: Context) : AutoCloseable {
         audioInput = AndroidMicrophoneInput(),
         viewModel = sessionStore,
         segmenter = RecognitionSegmenter(
-            splitPunctuation = sessionStore.state.value.splitPunctuation,
+            punctuationMode = sessionStore.state.value.punctuationMode,
         ),
         recognitionSession = recognitionSession,
         systemRecognitionSession = AndroidSystemRecognitionSession(
