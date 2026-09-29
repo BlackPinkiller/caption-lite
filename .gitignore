@@ -1,3 +1,4 @@
+# Local environments and build output
 /build/
 /build-*/
 /.venv/
@@ -5,22 +6,51 @@
 /.vs/
 /.vscode/
 /.opencode/
+/.codex-remote-attachments/
 /out/
 /*.user
 *.pdb
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local development material, excluded from the published project
+/AGENTS.md
+/tests/
+/android/app/src/test/
+/android/app/src/androidTest/
+/docs/validation/
+/docs/development.md
+/docs/usage.md
+/tools/benchmark_*.py
+/tools/smoke_asr.py
+
+# User data and downloaded models
 runtime/
 models/
 config.json
+config.json.*
+config.invalid.json
+.env
+.env.*
+!.env.example
+
+# OS metadata
+.DS_Store
+Thumbs.db
 
 # Android / Gradle
 /android/.gradle/
 /android/.kotlin/
 /android/local.properties
 /android/**/build/
-/android/llama/llama-cpp/
-/android/llama/.cxx/
 /android/.idea/
 /android/app/libs/*.aar
+/android/key.properties
+*.jks
+*.keystore
 *.iml

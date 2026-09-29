@@ -1,140 +1,131 @@
-# 实时字幕
+<h1 align="center">Captions · 实时字幕</h1>
 
-面向 Windows 10/11 的轻量实时字幕应用。它只捕获当前默认播放设备的系统混音，不使用麦克风；使用
-sherpa-onnx 运行 Nemotron 560 ms 英文流式识别，并可选 1120 ms 英文模型、Nemotron 3.5 ASR 560 ms
-多语言模型或轻量中文 Zipformer INT8；音频先经过内置的 Silero VAD INT8 语音检测，只把语音片段送入 ASR；
-支持可配置的 OpenAI Compatible LLM（默认名称 OpenAI）、Google2 或 DeepL API 翻译。
+<p align="center">将语音转为悬浮字幕，支持实时翻译与双语显示。</p>
 
-## 交互设计
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square" alt="Windows 10 / 11">
+  <img src="https://img.shields.io/badge/Android-17-3DDC84?style=flat-square" alt="Android 17">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT 许可证"></a>
+</p>
 
-- 应用打开后立即在后台加载 ASR 并捕获系统播放声音，不要求额外点击开始。
-- 字幕窗口无边框、透明、置顶，可拖动和缩放。
-- 字幕层不显示工具栏；解锁时可从字幕任意位置拖动，靠近边缘可缩放。
-- 字幕窗口本身不显示识别状态提示；托盘右键菜单分别显示运行状态、播放设备和模型状态，
-  悬浮提示显示相同的三行信息。
-- 锁定后穿透鼠标；通过托盘或 `Ctrl+Alt+L` 解锁。
-- 字幕按原文或译文条目计数，自然换行不占用额外句数；双语模式至少显示 2 句并完整保留当前原文和译文，额外句数用于最近的旧字幕。
-- 新句会短暂等待首个译文再整体切换；流式重译在超过当前已显示译文长度前保持旧画面，避免从头生成造成闪烁。
-- 设置和历史使用独立窗口。历史只保存在内存中，退出后不会留下记录。
-- 模型、配置和程序分离；不使用注册表，也不依赖系统 Python。
+<p align="center">
+  <img src="docs/images/overview.png" alt="清晰与电视字幕两种主题：同一句演示字幕对齐，用斜线分隔" width="1200">
+</p>
 
-## 准备与运行
+<table align="center">
+  <tr>
+    <td align="center" width="33%"><strong>只留字幕</strong><br><sub>悬浮置顶 · 锁定穿透</sub></td>
+    <td align="center" width="33%"><strong>本地识别</strong><br><sub>默认使用 CPU · 模型按需下载</sub></td>
+    <td align="center" width="33%"><strong>翻译自由选择</strong><br><sub>本地模型 · 在线服务</sub></td>
+  </tr>
+</table>
 
-在 PowerShell 中执行：
+<details>
+<summary>查看外观设置与字幕历史</summary>
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/images/appearance.png"><img src="docs/images/appearance.png" alt="外观设置"></a></td>
+    <td width="50%"><a href="docs/images/history.png"><img src="docs/images/history.png" alt="本次字幕历史"></a></td>
+  </tr>
+  <tr>
+    <td align="center">主题、字体与布局</td>
+    <td align="center">原文译文对照，双击复制</td>
+  </tr>
+</table>
+
+<sub>Windows 应用截图，使用演示文本。点击图片可查看大图。</sub>
+
+</details>
+
+<h2 align="center">开始使用</h2>
+
+| 平台 | 音频来源 | 系统要求 |
+| --- | --- | --- |
+| Windows | 默认播放设备的系统声音 | Windows 10 / 11，64 位 |
+| Android | 麦克风 | Android 17（API 37），arm64 |
+
+**Windows**
+
+1. 解压 `RealtimeSubtitle-portable.zip`，运行 `RealtimeSubtitle.exe`，无需安装 Python。
+2. 按提示下载识别模型，然后播放音频。默认识别英语。
+3. 右键托盘图标打开设置，选择翻译服务；只需原文时关闭翻译。
+
+拖动字幕调整位置；<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>L</kbd> 锁定或解锁。
+暂停、设置、历史和退出都在托盘菜单中。
+
+**Android**
+
+安装 APK 后授予麦克风权限，在设置中选择识别与翻译方式；需要悬浮字幕时开启悬浮窗权限。
+支持系统识别或本地 Nemotron，翻译可选端侧模型或在线服务。详见 [Android 说明](android/README.md)。
+
+<details>
+<summary><strong>识别模型与翻译配置</strong></summary>
+
+在 Windows 设置的“识别”页选择并下载模型：
+
+| 模型 | 语言 | 下载量 |
+| --- | --- | --- |
+| Nemotron 560 ms（默认） | 英文 | 约 442 MiB |
+| Nemotron 1120 ms | 英文，较长上下文 | 约 442 MiB |
+| Nemotron 3.5 560 ms | 多语言，可自动识别语言 | 约 453 MiB |
+| Zipformer INT8 | 中文 | 约 126 MiB |
+
+英文 Nemotron 可选高精度模式，需要 NVIDIA GPU，另行下载约 5.5 GB 的组件与模型。
+默认 INT8 模式无需显卡，也不会下载这些组件。
+
+在“翻译”页填写服务配置后测试连接：
+
+- **OpenAI 兼容接口 / llama.cpp**：填写 API 地址、模型及服务要求的密钥。
+- **Google2**：自动获取网页组件调用密钥，通常无需填写；不要填 Google Cloud 项目密钥。
+- **DeepL**：选择 API Free / Pro，填写对应密钥，也支持 `DEEPL_API_KEY` 环境变量。
+
+术语表使用 `识别文本 = 目标译文` 格式。
+
+</details>
+
+> [!NOTE]
+> Windows 识别在本机完成。在线翻译会发送识别文字，LLM 还会收到配置范围内的上下文与术语。
+> Android 系统识别服务可能上传音频；本地 Nemotron 在设备上运行。
+
+<h2 align="center">从源码构建</h2>
+
+<details>
+<summary><strong>Windows · Python 3.12（64 位）</strong></summary>
+
+在仓库根目录打开 PowerShell：
 
 ```powershell
 .\tools\setup.ps1
-.\tools\download-nemotron-model.ps1
 .\tools\run.ps1
 ```
 
-`requirements.txt` 记录支持的依赖范围，`requirements-lock.txt` 固定已验收的 Windows 构建
-版本。安装和正式构建使用锁文件，避免同一份源码在不同时间生成行为不同的 EXE。
-
-英文模型仍是默认项。需要多语言模型时可在设置的“识别”页选择并直接下载，也可以执行：
-
-```powershell
-.\tools\download-nemotron-model.ps1 -Multilingual
-```
-
-需要比较更长识别上下文时，可选择英文 Nemotron 1120 ms，或执行：
-
-```powershell
-.\tools\download-nemotron-model.ps1 -LongContext
-```
-
-Nemotron 下载包约 442–453 MiB，中文 Zipformer 约 126 MiB，只需下载一次，保存在
-`models` 目录。模型缺失时，应用会询问是否下载；
-托盘模型项和设置窗口的模型状态项都会变成下载按钮。下载百分比、解压和模型加载状态会同时
-显示在设置窗口、托盘右键菜单与悬浮提示中。下载完成后会验证官方发布包的大小和 SHA-256，
-通过后再原子替换模型目录；校验失败不会覆盖已有模型。
-560 ms 与 1120 ms 英文 Nemotron 还可选择高精度模式。该模式仅在选择后显示独立下载入口，
-点击下载时才在 EXE 旁安装约 5.5 GB 的 NVIDIA GPU 运行组件和 FP32 模型；默认轻量 INT8
-模式及其他模型不下载、加载或依赖这些组件。
-首次打开应用时加载模型可能需要数秒；
-通过托盘手动暂停时只停止音频采集，识别线程与已加载模型会保留在内存中；继续识别会直接复用它们。
-自动待机则在无播放声音达到设定时间后停止 ASR 解码，同时以很低的开销继续监测播放电平；声音恢复后自动唤醒。
-正常识别期间，Silero VAD 使用 512-sample 窗口区分语音和非语音，并按模型保留足够的前滚音频，
-避免持续把静音、音乐或环境声送入大型语音识别模型。
-退出应用或修改模型、语言等 ASR 配置时才会释放并重新创建识别器。
-
-下载可以在退出时取消。语音模型的原生加载调用本身不能从中途强制打断，因此加载期间退出时，
-应用会先隐藏界面，等待当前加载调用正常返回并释放识别器，然后才结束进程。
-
-本机 RTX 4070 对照测试中，CPU 的 RTF 为 0.467，CUDA 为 0.595；CUDA 还需要约 1.5 GB
-额外运行库。因此当前固定使用 CPU，这是该单路 INT8 流式模型在本机上的实测选择。
-
-## 打包 onefile
+首次运行可在界面下载模型。生成便携版：
 
 ```powershell
 .\tools\build.ps1
 ```
 
-产物为：
+产物为 `dist/RealtimeSubtitle-portable.zip`。安装与打包使用 `requirements-lock.txt` 固定依赖版本。
 
-```text
-dist/
-  RealtimeSubtitle.exe
-  config.example.json
+</details>
+
+<details>
+<summary><strong>Android · Linux / WSL 2，JDK 17</strong></summary>
+
+准备 `curl` 和 `unzip`，在仓库根目录执行：
+
+```bash
+cd android
+./tools/setup-wsl.sh
+./tools/build-wsl.sh
 ```
 
-把 `models` 目录放在 EXE 旁边即可运行。PyInstaller onefile 会在启动时把 Python/Qt
-依赖解压到临时目录；模型文件保持在 EXE 旁的独立 `models` 目录中。
+设置脚本准备 SDK 和依赖。产物为 `android/app/build/outputs/apk/debug/app-debug.apk`。
+这是调试包；正式发行需配置自己的签名。
 
-## 配置
+</details>
 
-首次保存设置或退出时，会在 EXE 旁生成 UTF-8 `config.json`。设置窗口可修改：
+<h2 align="center">许可证</h2>
 
-- 语音识别模型、模型目录、识别语言和自动待机时间
-- 源语言与目标语言（默认英语 → 简体中文）、翻译后端、LLM 提供商、Google2 密钥、DeepL API 套餐与密钥
-- 翻译总开关；关闭后识别和原文历史仍会继续运行
-- LLM 的 API 地址、可选模型与密钥、流式响应，以及超时、提示词模板和上下文上限
-- 分句软长度、向前回找和向后等待标点的窗口，以及时间上限
-- 预览发送的最小字符数、最迟发送间隔和立即发送变动量
-- 三种内置字幕主题与一个自动保存的自定义主题
-- 字体、字号、颜色、描边、阴影、背景、圆角、上下留白、间距、透明度、对齐和停留时间
-- 字幕句数上限（单语 1–6 句，双语 2–6 句）
-- 术语表，格式为 `识别文本 = 目标译文`
-
-Google2 使用 Google Translate 网页组件的公开调用方式。程序会在首次启动时从 Google 当前组件脚本
-自动获取并保存调用密钥，通常无需填写，也可在设置中查看和覆盖。
-DeepL 使用官方 `/v2/translate` API；密钥通过 Windows 当前用户 DPAPI 加密后保存在本地
-`config.json`，也可通过 `DEEPL_API_KEY` 环境变量提供。DeepL API Free 与 Pro 使用各自的
-官方服务地址。加密后的密钥只能由保存它的 Windows 用户读取。
-
-配置文件会按字段校验类型与范围；某个字段无效时只恢复该字段的默认值。JSON 文件整体损坏时，
-原内容会备份为 `config.invalid.json`，应用使用默认设置继续启动，并通过托盘提示恢复情况。
-
-需要排查识别、分句或翻译链路时，可在 `config.json` 中设置
-`"debug": {"enabled": true}`。程序会把带关联编号的 JSON 行日志写入
-`runtime/captions-debug.jsonl`，达到 5 MiB 后保留一份轮换文件。日志不包含音频、API 密钥或完整提示词；
-排查结束后改回 `false` 即可停止记录。
-
-llama.cpp 预览采用“当前请求 + 最新待处理文本”的合并策略：当前请求的流式结果会继续显示，
-尚未开始的旧预览会被最新文本替换，避免 ASR 高频更新造成请求堆积或界面一直丢弃当前结果。
-最终翻译最多保留 32 个进行中或待处理任务；超过上限时优先跳过较旧的等待任务，
-避免翻译服务异常时无限占用内存。待处理最终翻译若排队时间已经超过当前请求超时，会在发送前
-静默淘汰，优先保证实时字幕的新鲜度。每个请求只保留设置中允许的上下文条目。
-
-预览和最终翻译分别使用自己的短 keep-alive HTTP 连接池：每个连接池只在对应的单工作线程
-串行使用，继续兼容系统代理，并避免跨线程共享或长期保留陈旧连接。
-
-历史窗口底部会显示当前尚未提交的完整原文和最新译文；已提交记录与实时记录使用空行分区并
-完整换行。实时更新只会在用户原本位于底部时跟随滚动，不会打断向上阅读。
-历史数据最多保留 5000 条，界面默认只创建最新 200 条；滚动到顶部时每次再加载 200 条，
-避免长时间运行后为所有历史记录常驻创建 Qt 列表项。
-
-## 验证
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall -q captions main.py
-```
-
-安装多语言模型后，可用模型自带英文样本检查完整识别链路；也可传入其他 WAV 并指定语言：
-
-```powershell
-.\.venv\Scripts\python.exe .\tools\smoke_asr.py --model multilingual --language auto
-```
-
-完整验收仍需播放带英文语音的音频，并进行默认播放设备切换和长时间运行测试。
+<p align="center"><a href="LICENSE">MIT</a> · 第三方组件和下载模型保留各自许可，见 <a href="THIRD_PARTY_NOTICES.md">第三方声明</a>。</p>
