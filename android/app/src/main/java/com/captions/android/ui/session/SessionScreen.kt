@@ -51,6 +51,7 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.SessionEntry
 import com.captions.android.core.session.SessionUiState
+import com.captions.android.core.session.effectiveDisplayMode
 import com.captions.android.ui.theme.CaptionsTheme
 
 @Composable
@@ -118,7 +119,7 @@ fun SessionScreen(
                         SessionEntryView(
                             entry = entry,
                             highlighted = index == state.entries.lastIndex,
-                            mode = state.displayMode,
+                            mode = state.effectiveDisplayMode(),
                             fontChoice = state.fontChoice,
                             sourceSizeSp = state.sourceSizeSp,
                             translationSizeSp = state.translationSizeSp,

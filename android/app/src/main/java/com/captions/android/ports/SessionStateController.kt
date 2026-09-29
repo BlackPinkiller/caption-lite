@@ -31,5 +31,5 @@ interface SessionStateController {
     fun showMessage(message: String)
     fun updateCurrent(cueId: Long, source: String, translation: String? = null)
     fun commitCurrent()
-    fun updateTranslation(cueId: Long, translation: String)
+    fun updateTranslation(cueId: Long, translation: String, source: String? = null)
 }

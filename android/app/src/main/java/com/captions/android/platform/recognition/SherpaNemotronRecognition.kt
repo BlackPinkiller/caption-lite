@@ -47,7 +47,9 @@ class SherpaNemotronRecognitionFactory(
             endpointConfig = EndpointConfig(
                 rule1 = EndpointRule(false, 2.4f, 0f),
                 rule2 = EndpointRule(true, 0.8f, 0f),
-                rule3 = EndpointRule(false, 0f, 20f),
+                // Bound long continuous speech without resetting inside a word every 20 s.
+                // Normal VAD endpoints and subtitle segmentation remain independent.
+                rule3 = EndpointRule(false, 0f, 60f),
             ),
             enableEndpoint = true,
             decodingMethod = "greedy_search",

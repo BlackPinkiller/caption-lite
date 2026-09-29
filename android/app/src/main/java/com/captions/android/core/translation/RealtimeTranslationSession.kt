@@ -1,6 +1,7 @@
 package com.captions.android.core.translation
 
 import com.captions.android.core.session.TranslationSettings
+import com.captions.android.core.session.sourceExtendsTranslation
 import com.captions.android.ports.TextTranslator
 import com.captions.android.ports.TranslationInput
 import com.captions.android.ports.TranslationSession
@@ -26,10 +27,15 @@ class RealtimeTranslationSession(
     }
     private val previewLock = Any()
     private var activeCueId = -1L
-    private var lastPreviewText = ""
+    private var lastPreviewRequest: Request? = null
+    private val lastPreviewText: String get() = lastPreviewRequest?.text.orEmpty()
     private var lastPreviewSentAt = 0L
     private var pendingPreview: Request? = null
     private var scheduledPreview: ScheduledFuture<*>? = null
+    private var latestPreview: Request? = null
+    private var completedPreview: CompletedPreview? = null
+    private var previewInFlight = false
+    private var closed = false
 
     override fun preview(
         cueId: Long,
@@ -39,32 +45,19 @@ class RealtimeTranslationSession(
         onResult: (Long, String) -> Unit,
     ): Boolean {
         val source = text.trim()
-        if (!settings.enabled || source.length < PREVIEW_MIN_CHARS) return false
         val request = Request(cueId, source, context.toList(), settings, onResult)
         return runCatching {
             synchronized(previewLock) {
+                check(!closed)
                 if (activeCueId != cueId) resetPreviewLocked(cueId)
-                pendingPreview = request
-                if (source == lastPreviewText) return@synchronized
-                val elapsedMillis = if (lastPreviewSentAt == 0L) {
-                    PREVIEW_INTERVAL_MILLIS
-                } else {
-                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastPreviewSentAt)
-                }
-                val changed = changedCharacters(lastPreviewText, source)
-                val delay = if (
-                    lastPreviewText.isEmpty() ||
-                    changed >= PREVIEW_CHAR_DELTA ||
-                    elapsedMillis >= PREVIEW_INTERVAL_MILLIS
-                ) {
-                    0L
-                } else {
-                    PREVIEW_INTERVAL_MILLIS - elapsedMillis
-                }
-                scheduledPreview?.cancel(false)
-                scheduledPreview = scheduler.schedule(::sendPendingPreview, delay, TimeUnit.MILLISECONDS)
+                if (!request.hasSameInput(completedPreview?.request)) completedPreview = null
+                latestPreview = request
+                val eligible = settings.enabled && source.length >= PREVIEW_MIN_CHARS
+                pendingPreview = request.takeIf { eligible && !it.hasSameInput(lastPreviewRequest) }
+                schedulePreviewLocked()
+                eligible
             }
-        }.isSuccess
+        }.getOrDefault(false)
     }
 
     override fun commit(
@@ -77,62 +70,103 @@ class RealtimeTranslationSession(
     ): Boolean {
         val source = text.trim()
         if (!settings.enabled || source.isEmpty()) return false
-        synchronized(previewLock) {
+        return synchronized(previewLock) {
+            if (closed) return false
             if (activeCueId == cueId) {
                 scheduledPreview?.cancel(false)
                 scheduledPreview = null
                 pendingPreview = null
+                latestPreview = null
             }
-        }
-        val currentGeneration = generation.get()
-        val version = nextVersion(cueId)
-        val submittedAt = System.nanoTime()
-        val accepted = runCatching {
-            finalExecutor.execute {
-                val ageMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - submittedAt)
-                if (ageMillis > settings.timeoutMillis) {
-                    if (isCurrent(cueId, version, currentGeneration)) {
-                        onError("翻译等待超时")
+            val currentGeneration = generation.get()
+            val version = nextVersion(cueId)
+            val request = Request(cueId, source, context.toList(), settings, onResult)
+            val cached = completedPreview?.takeIf { request.hasSameInput(it.request) }
+            completedPreview = null
+            val submittedAt = System.nanoTime()
+            val accepted = runCatching {
+                finalExecutor.execute {
+                    val ageMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - submittedAt)
+                    if (ageMillis > settings.timeoutMillis) {
+                        synchronized(previewLock) {
+                            if (isCurrent(cueId, version, currentGeneration)) {
+                                retireVersion(cueId, version)
+                                onError("翻译等待超时")
+                            }
+                        }
+                        return@execute
                     }
-                    retireVersion(cueId, version)
-                    return@execute
+                    if (cached != null) {
+                        synchronized(previewLock) {
+                            if (isCurrent(cueId, version, currentGeneration)) {
+                                retireVersion(cueId, version)
+                                request.onResult(cueId, cached.translation)
+                            }
+                        }
+                    } else {
+                        translate(
+                            request = request,
+                            version = version,
+                            currentGeneration = currentGeneration,
+                            onError = onError,
+                        )
+                    }
                 }
-                translate(
-                    request = Request(cueId, source, context.toList(), settings, onResult),
-                    version = version,
-                    currentGeneration = currentGeneration,
-                    onError = onError,
-                )
-            }
-        }.isSuccess
-        if (!accepted) retireVersion(cueId, version)
-        return accepted
+            }.isSuccess
+            if (!accepted) retireVersion(cueId, version)
+            accepted
+        }
     }
 
-    private fun sendPendingPreview() {
-        val request = synchronized(previewLock) {
-            val current = pendingPreview ?: return
-            pendingPreview = null
-            scheduledPreview = null
-            if (current.text == lastPreviewText) return
-            lastPreviewText = current.text
-            lastPreviewSentAt = System.nanoTime()
-            current
+    private fun schedulePreviewLocked() {
+        scheduledPreview?.cancel(false)
+        scheduledPreview = null
+        val request = pendingPreview ?: return
+        if (previewInFlight || closed) return
+        val elapsedMillis = if (lastPreviewSentAt == 0L) {
+            PREVIEW_INTERVAL_MILLIS
+        } else {
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastPreviewSentAt)
         }
+        val delay = if (
+            lastPreviewText.isEmpty() ||
+            changedCharacters(lastPreviewText, request.text) >= PREVIEW_CHAR_DELTA
+        ) 0L else (PREVIEW_INTERVAL_MILLIS - elapsedMillis).coerceAtLeast(0L)
+        scheduledPreview = scheduler.schedule(::sendPendingPreview, delay, TimeUnit.MILLISECONDS)
+    }
+
+    private fun sendPendingPreview(): Unit = synchronized(previewLock) {
+        if (previewInFlight || closed) return
+        val request = pendingPreview ?: return
+        pendingPreview = null
+        scheduledPreview = null
+        lastPreviewRequest = request
+        lastPreviewSentAt = System.nanoTime()
+        previewInFlight = true
         val currentGeneration = generation.get()
         val version = nextVersion(request.cueId)
-        previewExecutor.queue.clear()
         val accepted = runCatching {
             previewExecutor.execute {
-                translate(
-                    request = request,
-                    version = version,
-                    currentGeneration = currentGeneration,
-                    onError = null,
-                )
+                try {
+                    translate(
+                        request = request,
+                        version = version,
+                        currentGeneration = currentGeneration,
+                        onError = null,
+                        preview = true,
+                    )
+                } finally {
+                    synchronized(previewLock) {
+                        previewInFlight = false
+                        schedulePreviewLocked()
+                    }
+                }
             }
         }.isSuccess
-        if (!accepted) retireVersion(request.cueId, version)
+        if (!accepted) {
+            previewInFlight = false
+            retireVersion(request.cueId, version)
+        }
     }
 
     private fun translate(
@@ -140,24 +174,34 @@ class RealtimeTranslationSession(
         version: Long,
         currentGeneration: Long,
         onError: ((String) -> Unit)?,
+        preview: Boolean = false,
     ) {
         try {
-            if (!isCurrent(request.cueId, version, currentGeneration)) return
+            synchronized(previewLock) {
+                if (!canDeliver(request, version, currentGeneration, preview)) return
+            }
             runCatching {
                 translator.translate(
                     TranslationInput(request.text, request.context),
                     request.settings,
                 )
             }.onSuccess { translated ->
-                if (
-                    translated.isNotBlank() &&
-                    isCurrent(request.cueId, version, currentGeneration)
-                ) {
-                    request.onResult(request.cueId, translated.trim())
+                synchronized(previewLock) {
+                    if (
+                        translated.isNotBlank() &&
+                        canDeliver(request, version, currentGeneration, preview)
+                    ) {
+                        if (preview) completedPreview = CompletedPreview(request, translated.trim())
+                        retireVersion(request.cueId, version)
+                        request.onResult(request.cueId, translated.trim())
+                    }
                 }
             }.onFailure { error ->
-                if (onError != null && isCurrent(request.cueId, version, currentGeneration)) {
-                    onError(error.message ?: "翻译失败")
+                synchronized(previewLock) {
+                    if (onError != null && isCurrent(request.cueId, version, currentGeneration)) {
+                        retireVersion(request.cueId, version)
+                        onError(error.message ?: "翻译失败")
+                    }
                 }
             }
         } finally {
@@ -165,18 +209,30 @@ class RealtimeTranslationSession(
         }
     }
 
-    override fun cancelPending() {
+    private fun canDeliver(
+        request: Request,
+        version: Long,
+        currentGeneration: Long,
+        preview: Boolean,
+    ): Boolean {
+        if (!isCurrent(request.cueId, version, currentGeneration)) return false
+        if (!preview) return true
+        val latest = latestPreview ?: return false
+        // Appending speech may use the completed prefix translation. A corrected
+        // hypothesis, different cue, or settings change must not revive stale text.
+        return latest.cueId == request.cueId && sourceExtendsTranslation(request.text, latest.text) &&
+            latest.settings == request.settings && latest.context == request.context
+    }
+
+    override fun cancelPending() = synchronized(previewLock) {
         generation.incrementAndGet()
         cueVersions.clear()
-        previewExecutor.queue.clear()
         finalExecutor.queue.clear()
-        synchronized(previewLock) {
-            scheduledPreview?.cancel(false)
-            resetPreviewLocked(-1L)
-        }
+        resetPreviewLocked(-1L)
     }
 
     override fun close() {
+        synchronized(previewLock) { closed = true }
         cancelPending()
         scheduler.shutdownNow()
         previewExecutor.shutdownNow()
@@ -188,8 +244,10 @@ class RealtimeTranslationSession(
         scheduledPreview?.cancel(false)
         scheduledPreview = null
         pendingPreview = null
+        latestPreview = null
+        completedPreview = null
         activeCueId = cueId
-        lastPreviewText = ""
+        lastPreviewRequest = null
         lastPreviewSentAt = 0L
     }
 
@@ -226,13 +284,18 @@ class RealtimeTranslationSession(
         ThreadPoolExecutor.AbortPolicy(),
     )
 
+    private data class CompletedPreview(val request: Request, val translation: String)
+
     private data class Request(
         val cueId: Long,
         val text: String,
         val context: List<String>,
         val settings: TranslationSettings,
         val onResult: (Long, String) -> Unit,
-    )
+    ) {
+        fun hasSameInput(other: Request?): Boolean = other != null &&
+            cueId == other.cueId && text == other.text && context == other.context && settings == other.settings
+    }
 
     private companion object {
         const val PREVIEW_MIN_CHARS = 4

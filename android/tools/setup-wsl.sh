@@ -10,9 +10,9 @@ readonly gradle_zip="$cache_dir/gradle-$gradle_version-bin.zip"
 readonly gradle_dir="$cache_dir/gradle-$gradle_version"
 readonly command_tools_zip="$cache_dir/commandlinetools-linux-15859902_latest.zip"
 readonly command_tools_sha256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
-readonly sherpa_version="1.13.5"
+readonly sherpa_version="1.13.8"
 readonly sherpa_aar="$project_dir/app/libs/sherpa-onnx-$sherpa_version.aar"
-readonly sherpa_sha256="6419cd8bc983e0c4fab06067f0fe0313fdc0f7103818ac1e7a08d50787b7a82b"
+readonly sherpa_sha256="633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
 
 mkdir -p "$cache_dir" "$sdk_dir"
 mkdir -p "$project_dir/app/libs"
@@ -77,12 +77,14 @@ fi
 
 printf 'sdk.dir=%s\n' "$sdk_dir" > "$project_dir/local.properties"
 
-if [[ ! -x "$project_dir/gradlew" ]]; then
+if [[ ! -f "$project_dir/gradlew" ]]; then
     "$gradle_dir/bin/gradle" \
         --project-dir "$project_dir" \
         wrapper \
         --gradle-version "$gradle_version" \
         --distribution-type bin
 fi
+
+chmod +x "$project_dir/gradlew"
 
 echo "Android toolchain ready: $sdk_dir"

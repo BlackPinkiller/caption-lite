@@ -34,6 +34,9 @@ class SessionStore(
 
     override val state: StateFlow<SessionUiState> = mutableState.asStateFlow()
 
+    // Recognition, preview/final translation, and UI settings arrive on
+    // different threads. Mutate the timeline and publish its snapshot together.
+    @Synchronized
     override fun start() {
         if (!mutableState.value.microphoneEnabled) {
             showMessage("麦克风已关闭")
@@ -42,6 +45,7 @@ class SessionStore(
         mutableState.value = mutableState.value.copy(running = true, starting = false, message = "")
     }
 
+    @Synchronized
     override fun beginStarting(message: String) {
         mutableState.value = mutableState.value.copy(
             running = false,
@@ -50,10 +54,12 @@ class SessionStore(
         )
     }
 
+    @Synchronized
     override fun pause() {
         mutableState.value = mutableState.value.copy(running = false, starting = false)
     }
 
+    @Synchronized
     override fun setMicrophoneEnabled(enabled: Boolean) {
         mutableState.value = mutableState.value.copy(
             microphoneEnabled = enabled,
@@ -62,41 +68,49 @@ class SessionStore(
         )
     }
 
+    @Synchronized
     override fun setDisplayMode(mode: DisplayMode) {
         mutableState.value = mutableState.value.copy(displayMode = mode)
         saveAppearance()
     }
 
+    @Synchronized
     override fun setFontChoice(choice: FontChoice) {
         mutableState.value = mutableState.value.copy(fontChoice = choice)
         saveAppearance()
     }
 
+    @Synchronized
     override fun setSourceSize(sizeSp: Int) {
         mutableState.value = mutableState.value.copy(sourceSizeSp = sizeSp.coerceIn(12, 40))
         saveAppearance()
     }
 
+    @Synchronized
     override fun setTranslationSize(sizeSp: Int) {
         mutableState.value = mutableState.value.copy(translationSizeSp = sizeSp.coerceIn(12, 40))
         saveAppearance()
     }
 
+    @Synchronized
     override fun setOverlayEnabled(enabled: Boolean) {
         mutableState.value = mutableState.value.copy(overlayEnabled = enabled)
         saveAppearance()
     }
 
+    @Synchronized
     override fun setOverlayBackgroundEnabled(enabled: Boolean) {
         mutableState.value = mutableState.value.copy(overlayBackgroundEnabled = enabled)
         saveAppearance()
     }
 
+    @Synchronized
     override fun setOverlayPosition(position: OverlayPosition) {
         mutableState.value = mutableState.value.copy(overlayPosition = position)
         saveAppearance()
     }
 
+    @Synchronized
     override fun setRecognitionEngine(engine: RecognitionEngine) {
         val translationSettings = mutableState.value.translationSettings.forRecognitionEngine(engine)
         mutableState.value = mutableState.value.copy(
@@ -108,11 +122,13 @@ class SessionStore(
         settingsStore.saveTranslation(translationSettings)
     }
 
+    @Synchronized
     override fun setNemotronModel(model: NemotronModel) {
         mutableState.value = mutableState.value.copy(nemotronModel = model, message = "")
         settingsStore.saveNemotronModel(model)
     }
 
+    @Synchronized
     override fun setPunctuationMode(mode: PunctuationMode) {
         mutableState.value = mutableState.value.copy(
             punctuationMode = mode,
@@ -121,6 +137,7 @@ class SessionStore(
         settingsStore.savePunctuationMode(mode)
     }
 
+    @Synchronized
     override fun setTranslationSettings(settings: TranslationSettings) {
         val normalized = settings.forRecognitionEngine(mutableState.value.recognitionEngine)
         mutableState.value = mutableState.value.copy(
@@ -130,22 +147,26 @@ class SessionStore(
         settingsStore.saveTranslation(normalized)
     }
 
+    @Synchronized
     override fun showMessage(message: String) {
         mutableState.value = mutableState.value.copy(message = message.trim())
     }
 
+    @Synchronized
     override fun updateCurrent(cueId: Long, source: String, translation: String?) {
         timeline.updateCurrent(cueId, source, translation)
         publishTimeline()
     }
 
+    @Synchronized
     override fun commitCurrent() {
         timeline.commitCurrent()
         publishTimeline()
     }
 
-    override fun updateTranslation(cueId: Long, translation: String) {
-        if (timeline.updateTranslation(cueId, translation)) publishTimeline()
+    @Synchronized
+    override fun updateTranslation(cueId: Long, translation: String, source: String?) {
+        if (timeline.updateTranslation(cueId, translation, source)) publishTimeline()
     }
 
     private fun publishTimeline() {

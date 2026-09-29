@@ -15,8 +15,6 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -39,10 +37,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    testOptions {
-        unitTests.isReturnDefaultValues = true
-    }
 }
 
 dependencies {
@@ -59,10 +53,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
-    implementation(files("libs/sherpa-onnx-1.13.5.aar"))
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
-
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20250517")
 }

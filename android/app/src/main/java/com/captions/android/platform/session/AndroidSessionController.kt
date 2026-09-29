@@ -119,7 +119,7 @@ class AndroidSessionController(
                 text = source,
                 context = translationContext(cueId, translationSettings.contextSegments),
                 settings = translationSettings,
-                onResult = viewModel::updateTranslation,
+                onResult = { id, translated -> viewModel.updateTranslation(id, translated, source) },
             )
         }
     }
@@ -157,7 +157,7 @@ class AndroidSessionController(
             text = source,
             context = translationContext(currentCueId, settings.contextSegments),
             settings = settings,
-            onResult = viewModel::updateTranslation,
+            onResult = { id, translated -> viewModel.updateTranslation(id, translated, source) },
             onError = viewModel::showMessage,
         ) ?: false
         if (!accepted && translationSession != null) {

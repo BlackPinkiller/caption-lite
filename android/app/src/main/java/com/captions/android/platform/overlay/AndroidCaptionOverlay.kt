@@ -15,6 +15,8 @@ import com.captions.android.core.session.DisplayMode
 import com.captions.android.core.session.FontChoice
 import com.captions.android.core.session.OverlayPosition
 import com.captions.android.core.session.SessionUiState
+import com.captions.android.core.session.effectiveDisplayMode
+import com.captions.android.core.session.overlayEntry
 import com.captions.android.ports.CaptionOverlay
 import kotlin.math.roundToInt
 
@@ -51,7 +53,8 @@ class AndroidCaptionOverlay(context: Context) : CaptionOverlay {
 
     override fun render(state: SessionUiState) {
         val active = state.starting || state.running
-        val entry = state.entries.lastOrNull { it.source.isNotBlank() || it.translation.isNotBlank() }
+        val entry = state.overlayEntry()
+        val displayMode = state.effectiveDisplayMode()
         val shouldShow = state.overlayEnabled && active && entry != null &&
             Settings.canDrawOverlays(appContext)
         if (!shouldShow) {
@@ -62,10 +65,10 @@ class AndroidCaptionOverlay(context: Context) : CaptionOverlay {
         source.text = entry.source
         translation.text = entry.translation
         source.visibility = if (
-            state.displayMode != DisplayMode.Translation && source.text.isNotBlank()
+            displayMode != DisplayMode.Translation && source.text.isNotBlank()
         ) View.VISIBLE else View.GONE
         translation.visibility = if (
-            state.displayMode != DisplayMode.Source && translation.text.isNotBlank()
+            displayMode != DisplayMode.Source && translation.text.isNotBlank()
         ) View.VISIBLE else View.GONE
         source.textSize = state.sourceSizeSp.toFloat()
         translation.textSize = state.translationSizeSp.toFloat()
