@@ -40,6 +40,12 @@
 
 <h2 align="center">开始使用</h2>
 
+<p align="center">
+  <a href="https://github.com/BlackPinkiller/caption-lite/releases/download/v0.2.0/caption-lite-windows-x64.zip"><strong>下载 Windows</strong></a> ·
+  <a href="https://github.com/BlackPinkiller/caption-lite/releases/download/v0.2.0/caption-lite-android-arm64-preview.apk"><strong>下载 Android 预览版</strong></a> ·
+  <a href="https://github.com/BlackPinkiller/caption-lite/releases/tag/v0.2.0">发布说明</a>
+</p>
+
 | 平台 | 音频来源 | 系统要求 |
 | --- | --- | --- |
 | Windows | 默认播放设备的系统声音 | Windows 10 / 11，64 位 |
@@ -47,7 +53,7 @@
 
 **Windows**
 
-1. 解压 `RealtimeSubtitle-portable.zip`，运行 `RealtimeSubtitle.exe`，无需安装 Python。
+1. 解压 `caption-lite-windows-x64.zip`，运行 `RealtimeSubtitle.exe`，无需安装 Python。
 2. 按提示下载识别模型，然后播放音频。默认识别英语。
 3. 右键托盘图标打开设置，选择翻译服务；只需原文时关闭翻译。
 
@@ -58,6 +64,8 @@
 
 安装 APK 后授予麦克风权限，在设置中选择识别与翻译方式；需要悬浮字幕时开启悬浮窗权限。
 支持系统识别或本地 Nemotron，翻译可选端侧模型或在线服务。详见 [Android 说明](android/README.md)。
+
+<sub>当前 Android 下载包使用调试签名，供预览试用。</sub>
 
 <details>
 <summary><strong>识别模型与翻译配置</strong></summary>
