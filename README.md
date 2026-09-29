@@ -1,4 +1,4 @@
-<h1 align="center">Captions · 实时字幕</h1>
+<h1 align="center">caption-lite · 实时字幕</h1>
 
 <p align="center">将语音转为悬浮字幕，支持实时翻译与双语显示。</p>
 

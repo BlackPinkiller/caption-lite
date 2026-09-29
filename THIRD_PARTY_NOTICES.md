@@ -1,6 +1,6 @@
 # 第三方声明
 
-Captions 自有代码采用 [MIT](LICENSE)，不改变第三方组件的许可。
+caption-lite 自有代码采用 [MIT](LICENSE)，不改变第三方组件的许可。
 
 ## 随源码附带
 
@@ -21,4 +21,4 @@ Python 依赖见 [requirements-lock.txt](desktop/requirements-lock.txt)，Androi
 [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)。
 
 Nemotron、Zipformer、Gemma 等模型和可选 GPU 组件不包含在本仓库中，由用户按需下载；
-它们遵循各自模型发布页和下载包中的条款，不适用 Captions 的 MIT 许可证。
+它们遵循各自模型发布页和下载包中的条款，不适用 caption-lite 的 MIT 许可证。
