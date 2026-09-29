@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from captions.config import AppConfig, model_preset, resolve_model_files
+from captions.core.settings import AppConfig
+from captions.core.model_catalog import model_preset
+from captions.adapters.model_files import resolve_model_files
 from captions.platforms.portable_paths import DEFAULT_APP_PATHS
 from captions.ports.app_paths import AppPaths
 from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, RecognitionUpdate
@@ -45,6 +47,7 @@ class SherpaOnnxRecognitionBackend:
 
     def create_streaming(self, config: AppConfig) -> SherpaStreamingRecognition:
         sherpa_onnx = self._sherpa()
+        preset = model_preset(config.asr.model_variant)
         files = resolve_model_files(config, app_paths=self.app_paths)
         missing = [str(path) for path in files.values() if not path.is_file()]
         if missing:
@@ -62,14 +65,16 @@ class SherpaOnnxRecognitionBackend:
             feature_dim=80,
             provider="cpu",
             decoding_method="greedy_search",
-            model_type=model_preset(config.asr.model_variant).model_type,
+            model_type=preset.model_type,
             enable_endpoint_detection=True,
             rule1_min_trailing_silence=2.4,
             rule2_min_trailing_silence=2.4,
-            rule3_min_utterance_length=20.0,
+            # Let VAD find a pause before the hard safety limit. NeMo resets
+            # encoder/decoder context, so a short hard limit can split a word.
+            rule3_min_utterance_length=preset.asr_max_utterance_seconds,
         )
         stream = recognizer.create_stream()
-        if model_preset(config.asr.model_variant).accepts_language_option:
+        if preset.accepts_language_option:
             stream.set_option("language", config.asr.language or "auto")
         return SherpaStreamingRecognition(recognizer, stream)
 

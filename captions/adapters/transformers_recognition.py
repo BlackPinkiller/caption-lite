@@ -9,8 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from captions.config import AppConfig
-from captions.high_precision_runtime import (
+from captions.core.settings import AppConfig
+from captions.platforms.windows.high_precision_runtime import (
     high_precision_model_dir,
     high_precision_runtime_ready,
     high_precision_site_packages,

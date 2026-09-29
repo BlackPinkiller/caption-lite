@@ -7,20 +7,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from captions.core.privacy import diagnostic_fields
+
 
 class Diagnostics:
     """Low-volume lifecycle trace for the recognition/translation pipeline."""
 
-    def __init__(self, enabled: bool = False, path: Path | None = None) -> None:
+    def __init__(
+        self, enabled: bool = False, path: Path | None = None,
+        *, include_text: bool = False, secrets: tuple[str, ...] = (),
+    ) -> None:
         self.enabled = bool(enabled)
+        self.include_text = bool(include_text)
+        self._secrets = secrets
         self.path = path
         self.session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self._started_at = time.monotonic()
         self._lock = threading.Lock()
         self.max_bytes = 5 * 1024 * 1024
 
-    def configure(self, enabled: bool, path: Path | None = None) -> None:
+    def configure(
+        self, enabled: bool, path: Path | None = None,
+        *, include_text: bool | None = None, secrets: tuple[str, ...] | None = None,
+    ) -> None:
         self.enabled = bool(enabled)
+        if include_text is not None:
+            self.include_text = bool(include_text)
+        if secrets is not None:
+            self._secrets = secrets
         if path is not None:
             self.path = path
 
@@ -32,7 +46,7 @@ class Diagnostics:
             "elapsed_ms": round((time.monotonic() - self._started_at) * 1000),
             "session": self.session_id,
             "event": name,
-            **fields,
+            **diagnostic_fields(fields, include_text=self.include_text, secrets=self._secrets),
         }
         line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         try:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QRect, QTimer, Qt, Slot
+from PySide6.QtCore import QObject, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -11,28 +11,31 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
 )
 
-from captions.config import (
-    AppConfig,
-    clone_config,
-    load_config,
+from captions.core.settings import AppConfig, clone_config, translation_secret_values
+from captions.config import load_config, save_config
+from captions.core.model_catalog import (
     model_download_integrity,
     model_download_spec,
+    model_preset,
+)
+from captions.adapters.model_files import (
     model_install_key,
     model_is_complete,
-    model_preset,
     resolve_model_dir,
-    save_config,
 )
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
-from captions.high_precision_runtime import high_precision_runtime_dir
+from captions.core.translation_alignment import source_extends_preview
+from captions.platforms.windows.high_precision_runtime import high_precision_runtime_dir
 from captions.platforms.global_shortcut import create_global_shortcut
-from captions.segmenter import Segmenter
-from captions.task_sessions import CaptureSession, ModelDownloadSession
-from captions.translation import HistoryRecord
-from captions.translation_session import TranslationJob, TranslationSession
+from captions.core.segmenter import Segmenter
+from captions.application.capture_session import CaptureSession
+from captions.application.model_download import ModelDownloadSession
+from captions.core.translation import HistoryRecord
+from captions.application.translation_session import TranslationJob, TranslationSession
 from captions.ui.history_dialog import HistoryDialog
 from captions.ui.overlay import OverlayWindow
 from captions.ui.settings_dialog import SettingsDialog
+from captions.ui.tray_status import tray_tooltip
 
 
 def compact_model_status(text: str, maximum: int = 22) -> str:
@@ -94,6 +97,8 @@ class CaptionApplication(QObject):
         self.diagnostics = Diagnostics(
             self.config.debug.enabled,
             self.config_path.parent / "runtime" / "captions-debug.jsonl",
+            include_text=self.config.debug.include_text,
+            secrets=translation_secret_values(self.config.translation),
         )
         self.diagnostics.event(
             "app.started",
@@ -116,7 +121,7 @@ class CaptionApplication(QObject):
         self.status_text = "正在启动"
         self.device_text = "等待识别"
         self.model_text = "正在检测"
-        self.status_before_test = ""
+        self.translation_test_request: tuple[int, int] | None = None
         self.capture_session = CaptureSession(self, self.diagnostics)
         self.download_session = ModelDownloadSession(self)
         self.download_prompt: QMessageBox | None = None
@@ -125,6 +130,8 @@ class CaptionApplication(QObject):
         self.download_status_text = ""
         self.capturing = False
         self.capture_paused = False
+        self.capture_pause_pending = False
+        self.capture_pause_revision = 0
         self.auto_standby = False
         self.model_loaded = False
         self.closing = False
@@ -175,6 +182,7 @@ class CaptionApplication(QObject):
             )
         if (
             self.config.translation.enabled
+            and self.config.translation.backend == "google2"
             and not self.config.translation.google2_api_key.strip()
         ):
             self.translation_session.request_google2_key()
@@ -205,6 +213,7 @@ class CaptionApplication(QObject):
     def _connect_sessions(self) -> None:
         self.capture_session.partial.connect(self._asr_partial)
         self.capture_session.endpoint.connect(self._asr_endpoint)
+        self.capture_session.paused.connect(self._asr_paused)
         self.capture_session.status.connect(self._set_status)
         self.capture_session.model_ready.connect(self._asr_model_ready)
         self.capture_session.auto_standby_changed.connect(
@@ -219,6 +228,7 @@ class CaptionApplication(QObject):
         self.download_session.error.connect(self._model_download_error)
         self.download_session.finished.connect(self._download_thread_finished)
         self.translation_session.started.connect(self._translation_started)
+        self.translation_session.restarted.connect(self._translation_restarted)
         self.translation_session.progress.connect(self._translation_progress)
         self.translation_session.result.connect(self._translation_result)
         self.translation_session.error.connect(self._translation_error)
@@ -256,7 +266,9 @@ class CaptionApplication(QObject):
         show_action = QAction("显示字幕", menu)
         show_action.triggered.connect(self._show_overlay)
         menu.addAction(show_action)
-        self.lock_action = QAction("锁定字幕", menu)
+        self.lock_action = QAction(
+            "解锁字幕" if self.config.window.locked else "锁定字幕", menu
+        )
         self.lock_action.triggered.connect(self.toggle_lock)
         menu.addAction(self.lock_action)
         menu.addSeparator()
@@ -328,6 +340,7 @@ class CaptionApplication(QObject):
         self.asr_error_message = ""
         self.model_loaded = False
         self.capture_paused = False
+        self.capture_pause_pending = False
         self._set_status("正在启动识别")
         self._set_model_status("正在加载")
         self.overlay.set_capturing(True)
@@ -338,10 +351,8 @@ class CaptionApplication(QObject):
     def stop_capture(self) -> None:
         if not self.capture_session.running or not self.capturing:
             return
-        self.capture_session.pause()
-        update = self.segmenter.flush(forced=True)
-        for commit in update.commits:
-            self._commit(commit.text, True)
+        self.capture_pause_pending = True
+        self.capture_pause_revision = self.capture_session.pause()
         self.capturing = False
         self.capture_paused = True
         self.auto_standby = False
@@ -350,6 +361,17 @@ class CaptionApplication(QObject):
         self._set_status("已暂停")
         if self.model_loaded:
             self._set_model_status("已加载")
+
+    @Slot(int)
+    def _asr_paused(self, revision: int) -> None:
+        if not getattr(self, "capture_pause_pending", False) or getattr(self, "closing", False):
+            return
+        if revision == self.capture_pause_revision:
+            self.capture_pause_pending = False
+        # All results from the in-flight read precede this queued acknowledgment.
+        # Commit once here, even if the user has already requested a resume.
+        for commit in self.segmenter.flush(forced=True).commits:
+            self._commit(commit.text, True)
 
     @Slot()
     def _asr_model_ready(self) -> None:
@@ -360,6 +382,8 @@ class CaptionApplication(QObject):
 
     @Slot()
     def _asr_thread_finished(self) -> None:
+        if getattr(self, "capture_pause_pending", False):
+            CaptionApplication._asr_paused(self, self.capture_pause_revision)
         self.capturing = False
         self.capture_paused = False
         self.auto_standby = False
@@ -385,6 +409,8 @@ class CaptionApplication(QObject):
     def _asr_partial(self, raw: str, revision: int) -> None:
         if getattr(self, "closing", False):
             return
+        if getattr(self, "capture_paused", False) and not getattr(self, "capture_pause_pending", False):
+            return
         update = self.segmenter.update(raw)
         for commit in update.commits:
             self._commit(commit.text, commit.forced)
@@ -394,6 +420,7 @@ class CaptionApplication(QObject):
             if (
                 not self.config.translation.enabled
                 or self.config.subtitle.mode in {"source", "bilingual"}
+                or self.overlay.canvas.cue_id == self.active_cue_id
             ):
                 self._display_source(self.active_cue_id, active)
             if self.config.translation.enabled:
@@ -409,6 +436,8 @@ class CaptionApplication(QObject):
     @Slot()
     def _asr_endpoint(self) -> None:
         if getattr(self, "closing", False):
+            return
+        if getattr(self, "capture_paused", False) and not getattr(self, "capture_pause_pending", False):
             return
         update = self.segmenter.flush()
         for commit in update.commits:
@@ -467,6 +496,7 @@ class CaptionApplication(QObject):
         if (
             not self.config.translation.enabled
             or self.config.subtitle.mode in {"source", "bilingual"}
+            or self.overlay.canvas.cue_id == cue_id
         ):
             self._display_source(cue_id, source)
         self.active_cue_id += 1
@@ -495,8 +525,8 @@ class CaptionApplication(QObject):
 
     @Slot(str)
     def _google2_key_error(self, message: str) -> None:
-        if self.config.translation.backend == "google2":
-            self._set_status(f"Google2 密钥获取失败：{message}")
+        if self.config.translation.enabled and self.config.translation.backend == "google2":
+            self._set_status(f"翻译不可用：Google2 密钥获取失败：{message}")
 
     @Slot(int, object)
     def _translation_started(self, generation: int, job: TranslationJob) -> None:
@@ -512,16 +542,30 @@ class CaptionApplication(QObject):
         if job.cue_id < canvas.cue_id:
             canvas.set_translation(job.cue_id, text)
             return
+        current_source = getattr(canvas, "source", "")
+        if (
+            job.kind == "preview"
+            and job.cue_id == canvas.cue_id
+            and current_source
+            and not source_extends_preview(job.source, current_source)
+        ):
+            return
         if (
             job.cue_id == canvas.cue_id
             and not final
-            and len(text) <= len(canvas.translation)
+            and canvas.translation.startswith(text)
         ):
             return
         source = job.source
         if job.cue_id == canvas.cue_id:
-            source = getattr(canvas, "source", "") or source
-        canvas.set_cue(job.cue_id, source, text)
+            source = current_source or source
+        canvas.set_cue(job.cue_id, source, text, translation_source=job.source)
+
+    @Slot(int, object)
+    def _translation_restarted(self, generation: int, job: TranslationJob) -> None:
+        if job.kind == "commit" and job.index is not None:
+            self.history.update_translation(job.index, "")
+            self.overlay.canvas.set_translation(job.cue_id, "")
 
     @Slot(int, object, str)
     def _translation_progress(
@@ -536,7 +580,7 @@ class CaptionApplication(QObject):
             self.history.update_translation(job.index, text)
             if (
                 generation == self.display_generation
-                or job.cue_id < self.overlay.canvas.cue_id
+                or job.cue_id <= self.overlay.canvas.cue_id
             ):
                 self._display_translation(job, text)
 
@@ -551,13 +595,13 @@ class CaptionApplication(QObject):
                 self._display_translation(job, text, final=True)
                 self.history.set_live_translation(job.source, text)
         elif job.kind == "test":
-            self.settings.set_translation_test_status("连接正常", success=True)
-            self._set_status(self.status_before_test or "翻译连接正常")
+            self._finish_translation_test(generation, "连接正常", success=True)
+            return
         elif job.index is not None:
             self.history.update_translation(job.index, text)
             if (
                 generation == self.display_generation
-                or job.cue_id < self.overlay.canvas.cue_id
+                or job.cue_id <= self.overlay.canvas.cue_id
             ):
                 self._display_translation(job, text, final=True)
         self._restart_clear_timer()
@@ -570,8 +614,7 @@ class CaptionApplication(QObject):
             self.display_generation = 0
             self.display_kind = ""
         if job.kind == "test":
-            self.settings.set_translation_test_status(message, success=False)
-            self._set_status(self.status_before_test or "翻译连接测试失败")
+            self._finish_translation_test(generation, message, success=False)
             return
         self._set_status(f"翻译不可用：{message}")
 
@@ -590,6 +633,9 @@ class CaptionApplication(QObject):
 
     @Slot(int, object)
     def _translation_cancelled(self, generation: int, job: TranslationJob) -> None:
+        if job.kind == "test":
+            self._finish_translation_test(generation, "测试已取消", success=False)
+            return
         if generation == self.display_generation:
             self.display_generation = 0
             self.display_kind = ""
@@ -642,6 +688,7 @@ class CaptionApplication(QObject):
     def apply_settings(self, config: AppConfig) -> None:
         was_capturing = self.capturing
         translation_was_enabled = self.config.translation.enabled
+        translation_changed = config.translation != self.config.translation
         had_asr_thread = self.capture_session.running
         asr_changed = config.asr != self.config.asr
         recognizer_changed = any(
@@ -668,9 +715,15 @@ class CaptionApplication(QObject):
         config.window.width = geometry.width()
         config.window.height = geometry.height()
         config.window.locked = self.config.window.locked
+        config.window.center_x_ratio = self.config.window.center_x_ratio
+        config.window.bottom_ratio = self.config.window.bottom_ratio
+        config.window.screen_name = self.config.window.screen_name
         self.config = config
         diagnostics = getattr(self, "diagnostics", NULL_DIAGNOSTICS)
-        diagnostics.configure(config.debug.enabled)
+        diagnostics.configure(
+            config.debug.enabled, include_text=config.debug.include_text,
+            secrets=translation_secret_values(config.translation),
+        )
         diagnostics.event(
             "settings.applied",
             translation_enabled=config.translation.enabled,
@@ -682,10 +735,24 @@ class CaptionApplication(QObject):
         if translation_was_enabled and not config.translation.enabled:
             self.translation_session.cancel_all()
             self.overlay.canvas.set_content(translation="")
-        elif (
+            CaptionApplication._restore_translation_status(self)
+        elif config.translation.enabled and translation_changed:
+            self.translation_session.invalidate_previews()
+            self.history.set_live(translation="")
+            if self.overlay.canvas.cue_id == self.active_cue_id:
+                self.overlay.canvas.set_content(translation="")
+            if self.segmenter.active:
+                self.translation_session.schedule_preview(
+                    self.segmenter.active, self.history.records,
+                    config.translation, config.segmentation, self.active_cue_id,
+                )
+        if (
             not translation_was_enabled
             and config.translation.enabled
+            and config.translation.backend == "google2"
             and not config.translation.google2_api_key.strip()
+            # An immediate preview obtains its own key through the translator.
+            and len(self.segmenter.active) < config.segmentation.preview_min_chars
         ):
             self.translation_session.request_google2_key()
         self.segmenter.max_chars = config.segmentation.max_chars
@@ -716,7 +783,7 @@ class CaptionApplication(QObject):
     def test_translation(self, config: AppConfig) -> None:
         if not config.translation.enabled:
             return
-        self.settings.set_translation_test_status("正在测试连接…")
+        revision = self.settings.translation_test_feedback.begin()
         sample = {
             "ZH": "这是一次翻译连接测试。",
             "JA": "これは翻訳接続のテストです。",
@@ -729,9 +796,14 @@ class CaptionApplication(QObject):
             "NL": "Dit is een test van de vertaalverbinding.",
             "RU": "Это проверка подключения к переводу.",
         }.get(config.translation.source_lang, "This is a translation test.")
-        self.translation_session.request_test(sample, config.translation)
-        self.status_before_test = self.status_text
-        self._set_status("正在测试翻译连接…")
+        generation = self.translation_session.request_test(sample, config.translation)
+        self.translation_test_request = (generation, revision)
+
+    def _finish_translation_test(self, generation: int, text: str, *, success: bool) -> None:
+        request = self.translation_test_request
+        if request is not None and request[0] == generation:
+            self.translation_test_request = None
+            self.settings.translation_test_feedback.finish(request[1], text, success=success)
 
     def _restart_clear_timer(self) -> None:
         stay = self.config.subtitle.stay_ms
@@ -939,7 +1011,7 @@ class CaptionApplication(QObject):
             self.model_action.setStatusTip(label.removesuffix("…"))
             self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
-            self.settings.set_model_status("未安装", downloadable=True)
+            self.settings.set_model_status("未安装", downloadable=True, target=self.config)
         self._refresh_tray_status()
 
     def _set_model_status(self, text: str) -> None:
@@ -950,7 +1022,7 @@ class CaptionApplication(QObject):
             return
         self._set_model_action_status(text)
         if hasattr(self, "settings"):
-            self.settings.set_model_status(text)
+            self.settings.set_model_status(text, target=self.config)
 
     def _set_download_status(self, text: str) -> None:
         if self.download_target is None:
@@ -991,7 +1063,7 @@ class CaptionApplication(QObject):
             self.model_action.setStatusTip(label.removesuffix("…"))
             self.model_action.setEnabled(True)
         if hasattr(self, "settings"):
-            self.settings.set_model_status(text, downloadable=True)
+            self.settings.set_model_status(text, downloadable=True, target=self.config)
         self._refresh_tray_status()
 
     def _set_status(self, text: str, menu_text: str | None = None) -> None:
@@ -1035,20 +1107,14 @@ class CaptionApplication(QObject):
             ):
                 self.tray.setIcon(self._app_icon(status_kind))
                 self._tray_status_kind = status_kind
-            self.tray.setToolTip(
-                "实时字幕\n"
-                f"状态：{compact_status}\n"
-                f"设备：{compact_device}\n"
-                f"模型：{self.model_text}"
-            )
+            self.tray.setToolTip(tray_tooltip(
+                self.status_text, self.device_text, self.model_text,
+                getattr(self, "download_status_text", "")
+                if getattr(self, "download_target", None) is not None else "",
+            ))
 
     def _restore_geometry(self) -> None:
-        window = self.config.window
-        geometry = QRect(window.x, window.y, max(480, window.width), max(140, window.height))
-        screens = QApplication.screens()
-        if not any(screen.availableGeometry().intersects(geometry) for screen in screens):
-            geometry.moveCenter(QApplication.primaryScreen().availableGeometry().center())
-        self.overlay.setGeometry(geometry)
+        self.overlay.restore_placement()
         CaptionApplication._apply_display_mode(self)
 
     def _geometry_changed(self) -> None:

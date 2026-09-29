@@ -37,11 +37,7 @@
     "context_segments": 3,
     "context_chars": 1200,
     "prompt_template": "源语言：{src}\n目标语言：{dst}\n翻译下面未完成或完整的字幕。\n只输出当前文本的译文，不要解释，不要续写或补全尚未说出的内容。\n{ctx}\n{terms}\n\n当前文本：\n{text}",
-    "glossary": {
-      "Vault": "避难所",
-      "Brotherhood of Steel": "钢铁兄弟会",
-      "Sole Survivor": "唯一幸存者"
-    }
+    "glossary": {}
   },
   "segmentation": {
     "max_chars": 160,
@@ -77,6 +73,10 @@
     "stay_ms": 5000
   },
   "window": {
+    "width_percent": 70,
+    "center_x_ratio": 0.5,
+    "bottom_ratio": 0.1,
+    "screen_name": "",
     "x": 240,
     "y": 700,
     "width": 1200,
@@ -88,6 +88,7 @@
     "virtual_key": 76
   },
   "debug": {
-    "enabled": false
+    "enabled": false,
+    "include_text": false
   }
 }

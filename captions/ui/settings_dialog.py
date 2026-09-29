@@ -3,196 +3,63 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRect, QSize, QSignalBlocker, QTimer, Qt, Signal
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QSyntaxHighlighter,
-    QTextCharFormat,
-)
+from PySide6.QtCore import QSignalBlocker, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QAbstractScrollArea,
-    QApplication,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QFontComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QStackedWidget,
-    QStyle,
-    QStyleOptionGroupBox,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QTabWidget,
     QTextEdit,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from captions.config import (
-    AppConfig,
-    LlmProviderConfig,
+from captions.core.settings import AppConfig, LlmProviderConfig, SubtitleConfig, clone_config
+from captions.core.model_catalog import (
     MODEL_CATALOG,
-    SUBTITLE_THEME_PRESETS,
-    SubtitleConfig,
     apply_model_preset,
-    apply_subtitle_theme,
-    clone_config,
     default_model_dir,
-    model_install_key,
-    model_is_complete,
     model_preset,
     supports_high_precision,
+)
+from captions.core.subtitle_style import (
+    SUBTITLE_THEME_PRESETS,
+    apply_subtitle_theme,
     subtitle_custom_style,
     subtitle_style_values,
 )
-from captions.core.prompt_template import (
-    DEFAULT_LLM_PROMPT_TEMPLATE,
-    PROMPT_PLACEHOLDER_PATTERN,
-)
+from captions.adapters.model_files import model_install_key, model_is_complete
+from captions.ui.translation_test_feedback import TranslationTestFeedback
+from captions.core.prompt_template import DEFAULT_LLM_PROMPT_TEMPLATE
 from captions.ui.caption_canvas import CaptionCanvas
+from captions.ui.settings_widgets import (
+    BACKEND_SEPARATOR_ROLE,
+    BackendComboBox,
+    ColorButton,
+    ExpandableSection,
+    PromptTemplateEdit,
+    TitleActionGroupBox,
+    WheelSafeComboBox,
+    WheelSafeDoubleSpinBox,
+    WheelSafeFontComboBox,
+    WheelSafeSpinBox,
+)
 
 
 LLM_BACKEND_PREFIX = "llm:"
 ADD_LLM_PROVIDER = "add_llm_provider"
-BACKEND_DELETE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-BACKEND_SEPARATOR_ROLE = int(Qt.ItemDataRole.UserRole) + 2
-BACKEND_DELETE_WIDTH = 32
-
-
-class PromptTemplateHighlighter(QSyntaxHighlighter):
-    def __init__(self, document, palette) -> None:
-        super().__init__(document)
-        self.placeholder_format = QTextCharFormat()
-        self.placeholder_format.setForeground(palette.highlight().color())
-        self.placeholder_format.setFontWeight(QFont.Weight.DemiBold)
-
-    def set_enabled_palette(self, enabled: bool, palette) -> None:
-        color = palette.highlight().color() if enabled else palette.mid().color()
-        self.placeholder_format.setForeground(color)
-        self.rehighlight()
-
-    def highlightBlock(self, text: str) -> None:
-        for match in PROMPT_PLACEHOLDER_PATTERN.finditer(text):
-            self.setFormat(
-                match.start(),
-                match.end() - match.start(),
-                self.placeholder_format,
-            )
-
-
-class PromptTemplateEdit(QPlainTextEdit):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setStyleSheet(
-            "QPlainTextEdit { color:palette(text); background-color:palette(base); }"
-            "QPlainTextEdit:disabled { color:palette(mid); }"
-        )
-        self.highlighter = PromptTemplateHighlighter(
-            self.document(),
-            self.palette(),
-        )
-
-    def changeEvent(self, event) -> None:
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.EnabledChange and hasattr(self, "highlighter"):
-            self.highlighter.set_enabled_palette(self.isEnabled(), self.palette())
-
-
-class TitleActionGroupBox(QGroupBox):
-    actionTriggered = Signal()
-    actionToggled = Signal(bool)
-
-    def __init__(
-        self,
-        title: str,
-        action_text: str,
-        parent=None,
-        *,
-        unchecked_action_text: str = "",
-    ) -> None:
-        super().__init__(title, parent)
-        self._checked_action_text = action_text
-        self._unchecked_action_text = unchecked_action_text
-        self.action_button = QToolButton(self)
-        self.action_button.setText(action_text)
-        self.action_button.setAutoRaise(True)
-        self.action_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        if unchecked_action_text:
-            self.action_button.setCheckable(True)
-            self.action_button.setChecked(True)
-            self.action_button.setStyleSheet(
-                "QToolButton { border:0; padding:0; margin:0; "
-                "background:palette(window); }"
-                "QToolButton:checked { color:palette(text); }"
-                "QToolButton:!checked { color:palette(text); }"
-                "QToolButton:hover { color:palette(highlight); }"
-            )
-            self.action_button.toggled.connect(self._action_toggled)
-        else:
-            self.action_button.setStyleSheet(
-                "QToolButton { border:0; padding:0; margin:0; "
-                "background:palette(window); color:palette(text); }"
-                "QToolButton:hover { color:palette(highlight); }"
-            )
-            self.action_button.clicked.connect(self.actionTriggered)
-
-    def set_content_enabled(self, enabled: bool) -> None:
-        layout = self.layout()
-        if layout is None:
-            return
-        for index in range(layout.count()):
-            widget = layout.itemAt(index).widget()
-            if widget is not None:
-                widget.setEnabled(enabled)
-
-    def _action_toggled(self, checked: bool) -> None:
-        self.action_button.setText(
-            self._checked_action_text if checked else self._unchecked_action_text
-        )
-        self._position_action()
-        self.actionToggled.emit(checked)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._position_action()
-
-    def _position_action(self) -> None:
-        option = QStyleOptionGroupBox()
-        self.initStyleOption(option)
-        title_rect = self.style().subControlRect(
-            QStyle.ComplexControl.CC_GroupBox,
-            option,
-            QStyle.SubControl.SC_GroupBoxLabel,
-            self,
-        )
-        title_width = self.fontMetrics().horizontalAdvance(self.title())
-        title_gap = max(0, title_rect.width() - title_width)
-        text_width = self.action_button.fontMetrics().horizontalAdvance(
-            self.action_button.text()
-        )
-        width = text_width + title_gap
-        height = max(title_rect.height(), self.action_button.fontMetrics().height())
-        self.action_button.setGeometry(
-            max(0, self.width() - width - 12),
-            title_rect.y(),
-            width,
-            height,
-        )
 
 
 ASR_LANGUAGE_LABELS = {
@@ -228,182 +95,6 @@ ASR_LANGUAGE_LABELS = {
 }
 
 
-def _forward_wheel_to_page(widget: QWidget, event) -> None:
-    parent = widget.parentWidget()
-    while parent is not None and not isinstance(parent, QAbstractScrollArea):
-        parent = parent.parentWidget()
-    if parent is None:
-        event.ignore()
-        return
-    QApplication.sendEvent(parent.viewport(), event)
-
-
-class WheelSafeComboBox(QComboBox):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        _forward_wheel_to_page(self, event)
-
-
-class BackendItemDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index) -> None:
-        if index.data(BACKEND_SEPARATOR_ROLE):
-            painter.save()
-            painter.setPen(option.palette.mid().color())
-            y = option.rect.center().y()
-            painter.drawLine(option.rect.left() + 8, y, option.rect.right() - 8, y)
-            painter.restore()
-            return
-        item_option = QStyleOptionViewItem(option)
-        if index.data(BACKEND_DELETE_ROLE):
-            item_option.rect = option.rect.adjusted(0, 0, -BACKEND_DELETE_WIDTH, 0)
-        super().paint(painter, item_option, index)
-        if not index.data(BACKEND_DELETE_ROLE):
-            return
-        delete_rect = QRect(
-            option.rect.right() - BACKEND_DELETE_WIDTH + 1,
-            option.rect.top(),
-            BACKEND_DELETE_WIDTH,
-            option.rect.height(),
-        )
-        painter.save()
-        painter.setPen(option.palette.text().color())
-        painter.drawText(delete_rect, Qt.AlignmentFlag.AlignCenter, "×")
-        painter.restore()
-
-    def sizeHint(self, option, index) -> QSize:  # noqa: N802
-        if index.data(BACKEND_SEPARATOR_ROLE):
-            return QSize(super().sizeHint(option, index).width(), 9)
-        return super().sizeHint(option, index)
-
-
-class BackendComboBox(WheelSafeComboBox):
-    delete_requested = Signal(str)
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setItemDelegate(BackendItemDelegate(self))
-        self.view().viewport().installEventFilter(self)
-
-    def set_item_deletable(self, index: int, deletable: bool) -> None:
-        self.setItemData(index, deletable, BACKEND_DELETE_ROLE)
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if watched is self.view().viewport() and event.type() in {
-            QEvent.Type.MouseButtonPress,
-            QEvent.Type.MouseButtonRelease,
-        }:
-            point = event.position().toPoint()
-            index = self.view().indexAt(point)
-            if index.isValid() and index.data(BACKEND_DELETE_ROLE):
-                rect = self.view().visualRect(index)
-                if point.x() >= rect.right() - BACKEND_DELETE_WIDTH + 1:
-                    if event.type() == QEvent.Type.MouseButtonRelease:
-                        backend = str(index.data(Qt.ItemDataRole.UserRole))
-                        self.hidePopup()
-                        self.delete_requested.emit(backend)
-                    return True
-        return super().eventFilter(watched, event)
-
-
-class WheelSafeSpinBox(QSpinBox):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        _forward_wheel_to_page(self, event)
-
-    def focusInEvent(self, event) -> None:  # noqa: N802
-        super().focusInEvent(event)
-        if event.reason() == Qt.FocusReason.MouseFocusReason:
-            QTimer.singleShot(0, self.selectAll)
-
-
-class WheelSafeDoubleSpinBox(QDoubleSpinBox):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        _forward_wheel_to_page(self, event)
-
-    def focusInEvent(self, event) -> None:  # noqa: N802
-        super().focusInEvent(event)
-        if event.reason() == Qt.FocusReason.MouseFocusReason:
-            QTimer.singleShot(0, self.selectAll)
-
-
-class WheelSafeFontComboBox(QFontComboBox):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        _forward_wheel_to_page(self, event)
-
-
-class ExpandableSection(QWidget):
-    def __init__(self, title: str, parent=None) -> None:
-        super().__init__(parent)
-        self._expanded = False
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        self.toggle = QToolButton()
-        self.toggle.setText(title)
-        self.toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toggle.setAutoRaise(True)
-        self.toggle.setStyleSheet("font-weight:600;padding:4px 0")
-        self.toggle.clicked.connect(self._toggle_expanded)
-        layout.addWidget(self.toggle)
-        self.body = QWidget()
-        self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(18, 0, 0, 0)
-        self.body_layout.setSpacing(10)
-        self.body.hide()
-        layout.addWidget(self.body)
-
-    def addWidget(self, widget: QWidget) -> None:  # noqa: N802
-        self.body_layout.addWidget(widget)
-
-    def _toggle_expanded(self) -> None:
-        self._set_expanded(not self._expanded)
-
-    def _set_expanded(self, expanded: bool) -> None:
-        self._expanded = expanded
-        self.toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
-        self.body.setVisible(expanded)
-
-
-class ColorButton(QPushButton):
-    color_changed = Signal(str)
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.value = "#ffffff"
-        self.clicked.connect(self.choose)
-
-    def set_color(self, value: str) -> None:
-        self.value = value
-        self.setText(value)
-        color = QColor(value)
-        if color.isValid():
-            foreground = "#000" if color.lightness() > 150 else "#fff"
-            self.setStyleSheet(f"background:{value};color:{foreground};padding:5px")
-        self.color_changed.emit(value)
-
-    def choose(self) -> None:
-        color = QColorDialog.getColor(QColor(self.value), self)
-        if color.isValid():
-            self.set_color(color.name(QColor.NameFormat.HexArgb))
-
-
 class SettingsDialog(QDialog):
     saved = Signal(object)
     test_translation_requested = Signal(object)
@@ -419,6 +110,7 @@ class SettingsDialog(QDialog):
         self._current_llm_provider_id: str | None = None
         self._model_download_target: AppConfig | None = None
         self._model_download_text = ""
+        self._active_model_status: tuple[tuple[str, ...], str, bool] | None = None
         self.setWindowTitle("实时字幕设置")
         self.resize(680, 620)
         layout = QVBoxLayout(self)
@@ -427,6 +119,21 @@ class SettingsDialog(QDialog):
         self._build_general()
         self._build_appearance()
         self._build_glossary()
+        self.translation_test_feedback = TranslationTestFeedback(
+            self.translation_test_status, self.translation_test_button,
+            self.translation_enabled.isChecked, self,
+        )
+        for signal in (
+            self.llm_base_url.textChanged, self.llm_model.textChanged,
+            self.llm_api_key.textChanged, self.llm_type.currentIndexChanged,
+            self.stream.toggled, self.google2_api_key.textChanged,
+            self.deepl_api_key.textChanged, self.deepl_api_plan.currentIndexChanged,
+            self.source_lang.currentIndexChanged, self.target_lang.currentIndexChanged,
+            self.timeout.valueChanged, self.context_segments.valueChanged,
+            self.context_chars.valueChanged, self.prompt_template.textChanged,
+            self.glossary.textChanged, self.translation_enabled.toggled, self.finished,
+        ):
+            signal.connect(self.translation_test_feedback.clear)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -671,9 +378,10 @@ class SettingsDialog(QDialog):
         google_form = QFormLayout(google_page)
         google_form.setContentsMargins(0, 0, 0, 0)
         self.google2_api_key = QLineEdit()
+        self.google2_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.google2_api_key.setPlaceholderText("首次使用时自动从 Google 获取")
         google_form.addRow("密钥", self.google2_api_key)
-        google_note = QLabel("程序会自动获取并保存，通常无需修改；需要时可直接覆盖。")
+        google_note = QLabel("自动获取网页组件密钥；无需填写 Google Cloud 项目密钥。")
         google_note.setWordWrap(True)
         google_note.setStyleSheet("color:#777")
         google_form.addRow("", google_note)
@@ -817,6 +525,12 @@ class SettingsDialog(QDialog):
         self.align.addItem("左对齐", "left")
         self.align.addItem("右对齐", "right")
         content_form.addRow("对齐", self.align)
+        self.width_percent = WheelSafeSpinBox()
+        self.width_percent.setRange(30, 90)
+        self.width_percent.setSingleStep(5)
+        self.width_percent.setSuffix(" %")
+        self.width_percent.setToolTip("占所在屏幕可用宽度的比例。")
+        content_form.addRow("字幕宽度", self.width_percent)
         self.stay = WheelSafeSpinBox()
         self.stay.setRange(0, 60000)
         self.stay.setSuffix(" ms")
@@ -872,7 +586,7 @@ class SettingsDialog(QDialog):
         self.padding = WheelSafeSpinBox()
         self.padding.setRange(0, 48)
         self.padding.setSuffix(" px")
-        readability_form.addRow("窗口边距", self.padding)
+        readability_form.addRow("文字内边距", self.padding)
         controls_layout.addWidget(readability_group)
 
         self.appearance_advanced = ExpandableSection("字幕层级")
@@ -917,7 +631,7 @@ class SettingsDialog(QDialog):
                 control.currentIndexChanged.connect(self._appearance_value_changed)
             else:
                 control.valueChanged.connect(self._appearance_value_changed)
-        for control in (self.mode, self.max_sentences, self.stay):
+        for control in (self.mode, self.max_sentences, self.stay, self.width_percent):
             if isinstance(control, QComboBox):
                 control.currentIndexChanged.connect(self._update_style_preview)
             else:
@@ -1017,6 +731,7 @@ class SettingsDialog(QDialog):
         self._select(self.appearance_theme, appearance_theme)
         self._set_style_controls(config.subtitle)
         self.stay.setValue(config.subtitle.stay_ms)
+        self.width_percent.setValue(config.window.width_percent)
         self.glossary.setPlainText(
             "\n".join(f"{source} = {target}" for source, target in config.translation.glossary.items())
         )
@@ -1039,7 +754,13 @@ class SettingsDialog(QDialog):
         self.translation_service_group.set_content_enabled(enabled)
         self.translation_advanced.setEnabled(enabled)
 
-    def set_model_status(self, text: str, downloadable: bool = False) -> None:
+    def set_model_status(
+        self, text: str, downloadable: bool = False, *, target: AppConfig | None = None,
+    ) -> None:
+        if target is not None:
+            self._active_model_status = (model_install_key(target), text, downloadable)
+            self._refresh_model_path_status()
+            return
         active = text.startswith(
             ("下载 ", "已下载 ", "正在连接", "正在解压", "正在准备", "正在安装")
         )
@@ -1074,16 +795,10 @@ class SettingsDialog(QDialog):
     def set_translation_test_status(
         self, text: str, *, success: bool | None = None
     ) -> None:
-        self.translation_test_status.setText(text)
-        self.translation_test_status.setVisible(bool(text))
-        if success is True:
-            color = "#2e7d32"
-        elif success is False:
-            color = "#b3261e"
+        if not text:
+            self.translation_test_feedback.clear()
         else:
-            color = "#777"
-        self.translation_test_status.setStyleSheet(f"color:{color}")
-        self.translation_test_button.setEnabled(not text or success is not None)
+            self.translation_test_feedback.show_status(text, success=success)
 
     def _refresh_model_path_status(self, *args) -> None:
         if not hasattr(self, "model_status"):
@@ -1106,7 +821,10 @@ class SettingsDialog(QDialog):
                 )
                 self.model_status.setEnabled(False)
             return
-        if model_is_complete(config):
+        active = self._active_model_status
+        if active is not None and model_install_key(config) == active[0]:
+            self.set_model_status(active[1], downloadable=active[2])
+        elif model_is_complete(config):
             self.set_model_status("已就绪")
         else:
             self.set_model_status("未安装", downloadable=True)
@@ -1203,6 +921,7 @@ class SettingsDialog(QDialog):
         else:
             config.subtitle.custom_style = self._draft_custom_style.copy()
         config.subtitle.stay_ms = self.stay.value()
+        config.window.width_percent = self.width_percent.value()
         return config
 
     def _save(self) -> None:
@@ -1213,6 +932,7 @@ class SettingsDialog(QDialog):
         if not hasattr(self, "style_preview"):
             return
         config = self.values()
+        self.style_preview.preview_width_percent = config.window.width_percent
         self.style_preview.set_style(config.subtitle)
 
     def _theme_changed(self, *args) -> None:

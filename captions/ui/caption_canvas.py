@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import replace
+from math import ceil
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -14,15 +15,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from captions.config import SubtitleConfig
+from captions.core.settings import SubtitleConfig
 from captions.core.caption_state import CaptionCue, CaptionState
-
-
-@dataclass
-class CaptionLine:
-    text: str
-    kind: str
-    opacity: float = 1.0
+from captions.ui.caption_layout import CaptionLine, fit_lines, lines_height
 
 
 def parse_color(value: str) -> QColor:
@@ -42,6 +37,8 @@ def parse_color(value: str) -> QColor:
 
 
 class CaptionCanvas(QWidget):
+    content_changed = Signal()
+
     def __init__(
         self,
         style: SubtitleConfig,
@@ -52,6 +49,7 @@ class CaptionCanvas(QWidget):
         super().__init__(parent)
         self.style = style
         self.preview = preview
+        self.preview_width_percent = 100
         self.state = CaptionState()
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -70,7 +68,7 @@ class CaptionCanvas(QWidget):
 
     @translation.setter
     def translation(self, value: str) -> None:
-        self.state.translation = value
+        self.state.set_content(translation=value)
 
     @property
     def cue_id(self) -> int:
@@ -90,6 +88,7 @@ class CaptionCanvas(QWidget):
 
     def set_style(self, style: SubtitleConfig) -> None:
         self.style = style
+        self.content_changed.emit()
         self.update()
 
     def set_content(
@@ -98,20 +97,27 @@ class CaptionCanvas(QWidget):
         translation: str | None = None,
     ) -> None:
         self.state.set_content(source, translation)
+        self.content_changed.emit()
         self.update()
 
-    def set_cue(self, cue_id: int, source: str, translation: str) -> None:
-        self.state.set_cue(cue_id, source, translation)
+    def set_cue(
+        self, cue_id: int, source: str, translation: str,
+        *, translation_source: str | None = None,
+    ) -> None:
+        self.state.set_cue(cue_id, source, translation, translation_source=translation_source)
+        self.content_changed.emit()
         self.update()
 
     def set_translation(self, cue_id: int, translation: str) -> bool:
         if self.state.set_translation(cue_id, translation):
+            self.content_changed.emit()
             self.update()
             return True
         return False
 
     def clear(self) -> None:
         self.state.clear()
+        self.content_changed.emit()
         self.update()
 
     def _font(self, kind: str) -> QFont:
@@ -167,9 +173,38 @@ class CaptionCanvas(QWidget):
                 entry.kind == "source",
             )
             visible.extend(
-                CaptionLine(line, entry.kind, entry.opacity) for line in wrapped
+                CaptionLine(line, entry.kind, entry.opacity, entry.current) for line in wrapped
             )
         return visible
+
+    def _padding(self) -> float:
+        return max(self.style.padding, 12 if self.style.background != "none" else 4)
+
+    def _line_heights(self) -> dict[str, float]:
+        extra = self.style.background_padding_y * 2 if self.style.background == "line" else 0
+        return {kind: QFontMetricsF(self._font(kind)).height() + extra
+                for kind in ("source", "translation")}
+
+    def _vertical_padding(self) -> float:
+        extra = self.style.background_padding_y * 2 if self.style.background == "block" else 0
+        return self._padding() * 2 + extra
+
+    def _fitted_lines(self, width: float, height: float) -> list[CaptionLine]:
+        lines = fit_lines(self._visible_lines(width), self._line_heights(),
+                          self.style.line_spacing, max(0, height))
+        for index, line in enumerate(lines):
+            metrics = QFontMetricsF(self._font(line.kind))
+            if metrics.horizontalAdvance(line.text) > width:
+                lines[index] = replace(line, text=metrics.elidedText(
+                    line.text, Qt.TextElideMode.ElideLeft, ceil(width)))
+        return lines
+
+    def preferred_height(self, width: int, maximum: int) -> int:
+        available = max(1, width - self._padding() * 2 - self.style.outline_width * 4)
+        padding = self._vertical_padding()
+        lines = self._fitted_lines(available, maximum - padding)
+        height = lines_height(lines, self._line_heights(), self.style.line_spacing) + padding
+        return min(maximum, max(72, ceil(height)))
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
@@ -179,9 +214,12 @@ class CaptionCanvas(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#64748b"))
             painter.drawRoundedRect(self.rect(), 8, 8)
-        padding = self.style.padding
-        available = max(40.0, self.width() - padding * 2)
-        lines = self._visible_lines(available - self.style.outline_width * 4)
+        drawing_width = self.width() * (self.preview_width_percent / 100 if self.preview else 1)
+        painter.translate((self.width() - drawing_width) / 2, 0)
+        padding = self._padding()
+        available = max(1.0, drawing_width - padding * 2)
+        lines = self._fitted_lines(max(1, available - self.style.outline_width * 4),
+                                   self.height() - self._vertical_padding())
         if not lines:
             return
         layouts: list[tuple[CaptionLine, QFont, str, float, float]] = []
@@ -216,9 +254,9 @@ class CaptionCanvas(QWidget):
             if self.style.align == "left":
                 x = float(padding)
             elif self.style.align == "right":
-                x = self.width() - padding - width
+                x = drawing_width - padding - width
             else:
-                x = (self.width() - width) / 2
+                x = (drawing_width - width) / 2
             metrics = QFontMetricsF(font)
             baseline = y + line_background_padding_y + metrics.ascent()
             bounds = QRectF(x - 8, y, width + 16, height)

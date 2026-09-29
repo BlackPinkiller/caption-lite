@@ -8,12 +8,12 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
 from captions.adapters.recognition_router import DEFAULT_RECOGNITION_BACKEND
-from captions.config import AppConfig
+from captions.core.settings import AppConfig
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
 from captions.platforms.audio_source import DEFAULT_AUDIO_SOURCE
 from captions.ports.audio_source import AudioCaptureKind, AudioSource
 from captions.ports.recognition import ASR_SAMPLE_RATE, VAD_WINDOW_SIZE, RecognitionBackend
-from captions.segmenter import should_commit_endpoint
+from captions.core.segmenter import should_commit_endpoint
 
 
 AUDIO_ACTIVITY_THRESHOLD = 0.0001
@@ -132,6 +132,7 @@ class VadSpeechGate:
 class AudioAsrWorker(QObject):
     partial = Signal(str, int)
     endpoint = Signal()
+    paused = Signal(int)
     status = Signal(str)
     model_ready = Signal()
     auto_standby_changed = Signal(bool)
@@ -153,6 +154,11 @@ class AudioAsrWorker(QObject):
         self.diagnostics = diagnostics
         self._stop = threading.Event()
         self._pause = threading.Event()
+        # A quick resume may clear _pause before the worker observes it. Keep
+        # the boundary latched until the current read/decode has been drained.
+        self._pause_pending = threading.Event()
+        self._pause_lock = threading.Lock()
+        self._pause_revision = 0
         self._standby = AutoStandbyDetector(config.asr.auto_standby_seconds)
         self._silence_min_chars = config.asr.silence_min_chars
 
@@ -173,7 +179,10 @@ class AudioAsrWorker(QObject):
             revision = 0
             last_text = ""
             while not self._stop.is_set():
-                if self._pause.is_set():
+                if self._pause_pending.is_set():
+                    with self._pause_lock:
+                        pause_revision = self._pause_revision
+                        self._pause_pending.clear()
                     recognition.reset()
                     speech_gate.reset()
                     last_text = ""
@@ -181,6 +190,7 @@ class AudioAsrWorker(QObject):
                         self._standby.standby = False
                         self.auto_standby_changed.emit(False)
                     self.status.emit("识别已暂停")
+                    self.paused.emit(pause_revision)
                     while self._pause.is_set() and not self._stop.is_set():
                         time.sleep(0.1)
                 if self._stop.is_set():
@@ -201,7 +211,7 @@ class AudioAsrWorker(QObject):
                 try:
                     with capture:
                         while not self._stop.is_set():
-                            if self._pause.is_set():
+                            if self._pause.is_set() or self._pause_pending.is_set():
                                 break
                             samples = capture.read(CAPTURE_BLOCK_SIZE)
                             mono = np.asarray(samples[:, 0], dtype=np.float32)
@@ -297,8 +307,12 @@ class AudioAsrWorker(QObject):
     def stop(self) -> None:
         self._stop.set()
 
-    def pause(self) -> None:
-        self._pause.set()
+    def pause(self) -> int:
+        with self._pause_lock:
+            self._pause_revision += 1
+            self._pause.set()
+            self._pause_pending.set()
+            return self._pause_revision
 
     def resume(self) -> None:
         woke = self._standby.configure(self.config.asr.auto_standby_seconds)

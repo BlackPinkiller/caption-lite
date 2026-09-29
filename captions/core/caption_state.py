@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from captions.core.translation_alignment import source_extends_preview
+
 
 @dataclass
 class CaptionEntry:
     text: str
     kind: str
     opacity: float = 1.0
+    current: bool = False
 
 
 @dataclass
@@ -23,7 +26,9 @@ class CaptionState:
     def __init__(self) -> None:
         self.source = ""
         self.translation = ""
+        self.translation_source = ""
         self.cue_id = 0
+        self._cleared_through_cue_id = 0
         self.previous_cues: list[CaptionCue] = []
 
     def set_content(
@@ -32,11 +37,20 @@ class CaptionState:
         translation: str | None = None,
     ) -> None:
         if source is not None:
+            if not source_extends_preview(self.translation_source or self.source, source):
+                self.translation = ""
+                self.translation_source = ""
             self.source = source
         if translation is not None:
             self.translation = translation
+            self.translation_source = self.source if translation else ""
 
-    def set_cue(self, cue_id: int, source: str, translation: str) -> None:
+    def set_cue(
+        self, cue_id: int, source: str, translation: str,
+        *, translation_source: str | None = None,
+    ) -> None:
+        if cue_id <= self._cleared_through_cue_id:
+            return
         source = source.strip()
         translation = translation.strip()
         if cue_id != self.cue_id:
@@ -48,11 +62,15 @@ class CaptionState:
             self.cue_id = cue_id
         self.source = source
         self.translation = translation
+        self.translation_source = (
+            source if translation_source is None else translation_source
+        ) if translation else ""
 
     def set_translation(self, cue_id: int, translation: str) -> bool:
         translation = translation.strip()
         if cue_id == self.cue_id:
             self.translation = translation
+            self.translation_source = self.source if translation else ""
             return True
         for cue in reversed(self.previous_cues):
             if cue.cue_id == cue_id:
@@ -61,7 +79,10 @@ class CaptionState:
         return False
 
     def clear(self) -> None:
+        # Hiding captions must not make a delayed result from an older cue new.
+        self._cleared_through_cue_id = max(self._cleared_through_cue_id, self.cue_id)
         self.source = self.translation = ""
+        self.translation_source = ""
         self.cue_id = 0
         self.previous_cues.clear()
 
@@ -83,7 +104,7 @@ class CaptionState:
                 if cue.source
             ]
             if current.source:
-                rows.append(CaptionEntry(current.source, "source", preview_opacity))
+                rows.append(CaptionEntry(current.source, "source", preview_opacity, True))
             return rows[-limit:]
 
         if mode == "translation":
@@ -94,16 +115,16 @@ class CaptionState:
             ]
             if current.translation:
                 rows.append(
-                    CaptionEntry(current.translation, "translation", preview_opacity)
+                    CaptionEntry(current.translation, "translation", preview_opacity, True)
                 )
             return rows[-limit:]
 
         current_rows: list[CaptionEntry] = []
         if current.source:
-            current_rows.append(CaptionEntry(current.source, "source", preview_opacity))
+            current_rows.append(CaptionEntry(current.source, "source", preview_opacity, True))
         if current.translation:
             current_rows.append(
-                CaptionEntry(current.translation, "translation", preview_opacity)
+                CaptionEntry(current.translation, "translation", preview_opacity, True)
             )
         remaining = max(0, limit - len(current_rows))
         older_groups: list[list[CaptionEntry]] = []

@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from captions.translation import HistoryRecord
+from captions.core.translation_alignment import source_extends_preview
+from captions.core.translation import HistoryRecord
 
 MAX_HISTORY_RECORDS = 5_000
 HISTORY_PAGE_SIZE = 200
@@ -37,6 +38,8 @@ class HistoryDialog(QDialog):
         self.records: list[HistoryRecord] = []
         self._record_ids: list[int] = []
         self._records_by_id: dict[int, HistoryRecord] = {}
+        self._items: dict[int | str, QListWidgetItem] = {}
+        self._needs_refresh = False
         self._next_record_id = 0
         self._loaded_count = HISTORY_PAGE_SIZE
         self.live_source = ""
@@ -134,7 +137,7 @@ class HistoryDialog(QDialog):
         self.live_translation_source = ""
         live = self._find_item("live")
         if live is not None:
-            self.list.takeItem(self.list.row(live))
+            self._remove_item(live)
         self._append_record_item(record_id, record)
         return record_id
 
@@ -150,12 +153,13 @@ class HistoryDialog(QDialog):
             self._records_by_id.pop(expired_id, None)
             expired_item = self._find_item(expired_id)
             if expired_item is not None:
-                self.list.takeItem(self.list.row(expired_item))
+                self._remove_item(expired_item)
         return record_id
 
     def _append_record_item(self, index: int, record: HistoryRecord) -> None:
         item = QListWidgetItem(self._record_text(record))
         item.setData(Qt.ItemDataRole.UserRole, index)
+        self._items[index] = item
         item.setToolTip("双击复制")
         live = self._find_item("live")
         if live is None:
@@ -171,13 +175,16 @@ class HistoryDialog(QDialog):
         live_count = 1 if self._find_item("live") is not None else 0
         rendered_records = self.list.count() - live_count
         while rendered_records > limit:
-            self.list.takeItem(0)
+            self._remove_item(self.list.item(0))
             rendered_records -= 1
 
     def update_translation(self, record_id: int, translation: str) -> None:
         record = self._records_by_id.get(record_id)
         if record is not None:
             record.translation = translation
+            if not self.isVisible():
+                self._needs_refresh = True
+                return
             item = self._find_item(record_id)
             if item is not None:
                 item.setText(self._record_text(record))
@@ -189,19 +196,26 @@ class HistoryDialog(QDialog):
         translation: str | None = None,
     ) -> None:
         if source is not None:
+            if not source_extends_preview(self.live_translation_source, source):
+                self.live_translation = ""
+                self.live_translation_source = ""
             self.live_source = source
         if translation is not None:
             self.live_translation = translation
             self.live_translation_source = self.live_source
+        if not self.isVisible():
+            self._needs_refresh = True
+            return
         item = self._find_item("live")
         if not self.live_source and not self.live_translation:
             if item is not None:
-                self.list.takeItem(self.list.row(item))
+                self._remove_item(item)
             self._update_empty_state()
             return
         if item is None:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, "live")
+            self._items["live"] = item
             self._style_live_item(item)
             self.list.addItem(item)
         item.setText(self._live_text())
@@ -214,10 +228,12 @@ class HistoryDialog(QDialog):
         self.live_translation_source = ""
         item = self._find_item("live")
         if item is not None:
-            self.list.takeItem(self.list.row(item))
+            self._remove_item(item)
         self._update_empty_state()
 
     def set_live_translation(self, source: str, translation: str) -> None:
+        if not source_extends_preview(source, self.live_source):
+            return
         self.set_live(translation=translation)
         self.live_translation_source = source
 
@@ -226,6 +242,9 @@ class HistoryDialog(QDialog):
         if not self.translation_enabled:
             self.live_translation = ""
             self.live_translation_source = ""
+        if not self.isVisible():
+            self._needs_refresh = True
+            return
         live = self._find_item("live")
         if live is not None:
             live.setText(self._live_text())
@@ -257,6 +276,7 @@ class HistoryDialog(QDialog):
         follow_live = self.follow_live
         old_value = scrollbar.value()
         self._rebuilding = True
+        self._items.clear()
         self.list.clear()
         start = max(0, len(self.records) - self._loaded_count)
         for record_id, record in zip(
@@ -264,23 +284,25 @@ class HistoryDialog(QDialog):
         ):
             item = QListWidgetItem(self._record_text(record, mode))
             item.setData(Qt.ItemDataRole.UserRole, record_id)
+            self._items[record_id] = item
             item.setToolTip("双击复制")
             self.list.addItem(item)
         if self.live_source or self.live_translation:
             item = QListWidgetItem(self._live_text(mode))
             item.setData(Qt.ItemDataRole.UserRole, "live")
+            self._items["live"] = item
             self._style_live_item(item)
             item.setToolTip("当前实时字幕")
             self.list.addItem(item)
-        self._rebuilding = False
+        self._needs_refresh = False
         self.follow_live = follow_live
-        QTimer.singleShot(0, self._reflow_items)
-        QTimer.singleShot(
-            0,
-            self.list.scrollToBottom
-            if follow_live
-            else lambda value=old_value: self.list.verticalScrollBar().setValue(value),
-        )
+        self._reflow_items()
+        self.list.doItemsLayout()
+        if follow_live:
+            self.list.scrollToBottom()
+        else:
+            scrollbar.setValue(old_value)
+        self._rebuilding = False
         self._update_empty_state()
 
     def _update_empty_state(self) -> None:
@@ -313,11 +335,11 @@ class HistoryDialog(QDialog):
         return "\n".join(parts)
 
     def _find_item(self, identity: int | str) -> QListWidgetItem | None:
-        for row in range(self.list.count()):
-            item = self.list.item(row)
-            if item.data(Qt.ItemDataRole.UserRole) == identity:
-                return item
-        return None
+        return self._items.get(identity)
+
+    def _remove_item(self, item: QListWidgetItem) -> None:
+        self._items.pop(item.data(Qt.ItemDataRole.UserRole), None)
+        self.list.takeItem(self.list.row(item))
 
     def _scroll_position_changed(self, value: int) -> None:
         if self._rebuilding:
@@ -347,6 +369,7 @@ class HistoryDialog(QDialog):
         for row, position in enumerate(range(new_start, old_start)):
             item = QListWidgetItem(self._record_text(self.records[position], mode))
             item.setData(Qt.ItemDataRole.UserRole, self._record_ids[position])
+            self._items[self._record_ids[position]] = item
             item.setToolTip("双击复制")
             self.list.insertItem(row, item)
             self._reflow_item(item)
@@ -362,7 +385,11 @@ class HistoryDialog(QDialog):
     def _scroll_range_changed(self, minimum: int, maximum: int) -> None:
         if self._rebuilding or not self.follow_live:
             return
-        QTimer.singleShot(0, self.list.scrollToBottom)
+        QTimer.singleShot(0, self._follow_to_bottom)
+
+    def _follow_to_bottom(self) -> None:
+        if self.follow_live and not self._rebuilding:
+            self.list.scrollToBottom()
 
     @staticmethod
     def _mix_color(base: QColor, accent: QColor, amount: float) -> QColor:
@@ -420,12 +447,21 @@ class HistoryDialog(QDialog):
             self._reflow_item(self.list.item(index))
 
     def _reflow_item(self, item: QListWidgetItem) -> None:
+        if not self.isVisible():
+            return
         width = max(100, self.list.viewport().width() - 24)
         flags = Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere
         bounds = self.list.fontMetrics().boundingRect(
             QRect(0, 0, width, 10000), flags, item.text()
         )
         item.setSizeHint(QSize(width, bounds.height() + 22))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._needs_refresh:
+            self.refresh()
+        else:
+            self._reflow_items()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

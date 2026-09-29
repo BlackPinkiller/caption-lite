@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from captions.adapters.sherpa_onnx_recognition import SherpaOnnxRecognitionBackend
 from captions.adapters.transformers_recognition import TransformersRecognitionBackend
-from captions.config import AppConfig
+from captions.core.settings import AppConfig
 from captions.platforms.portable_paths import DEFAULT_APP_PATHS
 from captions.ports.app_paths import AppPaths
 

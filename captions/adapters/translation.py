@@ -5,19 +5,32 @@ import os
 import re
 import threading
 import time
+from copy import deepcopy
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from typing import Callable
 
 import httpx
 from PySide6.QtCore import QObject, Signal
 
-from captions.config import (
+from captions.adapters.translation_http import DeadlineClient, TranslationCancellation
+from captions.adapters.translation_progress import TimedStreamProgress
+from captions.adapters.translation_recovery import (
+    IncompleteStreamError,
+    recover_interrupted_stream,
+)
+from captions.core.settings import (
     TranslationConfig,
     active_llm_provider,
     llm_chat_completions_url,
+    translation_secret_values,
 )
-from captions.core.prompt_template import render_prompt_template
+from captions.core.translation import (
+    HistoryRecord,
+    StaleTranslationError,
+    translation_queue_expired,
+    build_hymt_prompt,
+)
+from captions.core.privacy import redact_sensitive_text
 
 GOOGLE2_BOOTSTRAP_URL = (
     "https://translate.google.com/translate_a/element.js"
@@ -27,23 +40,6 @@ MAX_PENDING_FINAL_TRANSLATIONS = 32
 MAX_STREAM_RESPONSE_CHARS = 16_384
 LLAMA_MAX_TOKENS = 1_024
 
-LANGUAGE_NAMES = {
-    "AUTO": "自动识别的语言",
-    "EN": "英语",
-    "ZH": "中文",
-    "ZH-HANS": "简体中文",
-    "ZH-HANT": "繁体中文",
-    "EN-US": "英语",
-    "DE": "德语",
-    "FR": "法语",
-    "ES": "西班牙语",
-    "IT": "意大利语",
-    "PT": "葡萄牙语",
-    "JA": "日语",
-    "KO": "韩语",
-    "NL": "荷兰语",
-    "RU": "俄语",
-}
 
 GOOGLE_LANGUAGE_CODES = {
     "AUTO": "auto",
@@ -63,108 +59,10 @@ GOOGLE_LANGUAGE_CODES = {
     "RU": "ru",
 }
 
-@dataclass
-class HistoryRecord:
-    time: str
-    source: str
-    translation: str
-    backend: str
-    forced: bool = False
-
-
-class StaleTranslationError(RuntimeError):
-    pass
-
-
-class TranslationCancellation:
-    def __init__(self) -> None:
-        self._event = threading.Event()
-        self._lock = threading.Lock()
-        self._response: httpx.Response | None = None
-
-    def is_set(self) -> bool:
-        return self._event.is_set()
-
-    def cancel(self) -> None:
-        self._event.set()
-        with self._lock:
-            response = self._response
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-
-    def attach(self, response: httpx.Response) -> None:
-        with self._lock:
-            if self._event.is_set():
-                close_now = True
-            else:
-                self._response = response
-                close_now = False
-        if close_now:
-            response.close()
-            raise CancelledError()
-
-    def detach(self, response: httpx.Response) -> None:
-        with self._lock:
-            if self._response is response:
-                self._response = None
-
-
-def translation_queue_expired(
-    submitted_at: float, timeout_ms: int, *, now: float | None = None
-) -> bool:
-    now = time.monotonic() if now is None else now
-    maximum_age = max(1.0, timeout_ms / 1000)
-    return now - submitted_at > maximum_age
-
-
-def matching_glossary(glossary: dict[str, str], text: str) -> list[tuple[str, str]]:
-    matches: list[tuple[str, str]] = []
-    for source, target in glossary.items():
-        if re.search(rf"(?<!\w){re.escape(source)}(?!\w)", text, re.IGNORECASE):
-            matches.append((source, target))
-    return sorted(matches, key=lambda item: len(item[0]), reverse=True)
-
-
-def build_hymt_prompt(
-    current: str, history: list[HistoryRecord], config: TranslationConfig
-) -> str:
-    context: list[str] = []
-    chars = 0
-    for item in reversed(history[-config.context_segments :]):
-        if chars + len(item.source) > config.context_chars:
-            break
-        context.insert(0, item.source)
-        chars += len(item.source)
-    background = "\n".join(context)
-    searchable = f"{background}\n{current}"
-    source = LANGUAGE_NAMES.get(config.source_lang, config.source_lang)
-    target = LANGUAGE_NAMES.get(config.target_lang, config.target_lang)
-    terms = matching_glossary(config.glossary, searchable)
-    context_block = (
-        f"仅供消歧的上文（不要翻译）：\n{background}" if background else ""
-    )
-    glossary_block = (
-        "必须遵守的术语：" + "".join(f"\n{s} = {t}" for s, t in terms)
-        if terms
-        else ""
-    )
-    return render_prompt_template(
-        config.prompt_template,
-        {
-            "src": source,
-            "dst": target,
-            "ctx": context_block,
-            "terms": glossary_block,
-            "text": current,
-        },
-    )
-
 
 class TranslationSignals(QObject):
     started = Signal(int)
+    restarted = Signal(int)
     progress = Signal(int, str)
     result = Signal(int, str)
     error = Signal(int, str)
@@ -207,6 +105,7 @@ class Translator(QObject):
         *,
         preview: bool = False,
         on_registered: Callable[[int], None] | None = None,
+        google2_key_config: TranslationConfig | None = None,
     ) -> int:
         with self._lock:
             if self._closing:
@@ -215,8 +114,11 @@ class Translator(QObject):
         generation = self._generation
         if on_registered is not None:
             on_registered(generation)
+        key_config = google2_key_config if google2_key_config is not None else config
+        original_google2_key = config.google2_api_key
+        config = deepcopy(config)
         context_segments = max(0, int(config.context_segments))
-        snapshot = list(history[-context_segments:]) if context_segments else []
+        snapshot = deepcopy(history[-context_segments:]) if context_segments else []
         if preview:
             self._cancel_preview()
         if not preview:
@@ -233,15 +135,41 @@ class Translator(QObject):
                 submitted_at, config.timeout_ms
             ):
                 raise StaleTranslationError()
+            # Keep the established queue-expiry policy. Sharing that budget
+            # with execution dropped more final cues in the paired overload
+            # replay. The request itself (including retries) has one deadline.
+            cancellation.deadline = time.monotonic() + max(1.0, config.timeout_ms / 1000)
             self.signals.started.emit(generation)
-            return self._request(
-                text,
-                snapshot,
-                config,
-                lambda partial: self.signals.progress.emit(generation, partial),
-                client=client,
-                cancellation=cancellation,
-            )
+            try:
+                with cancellation.watch():
+                    def attempt() -> str:
+                        return self._request(
+                            text,
+                            snapshot,
+                            config,
+                            lambda partial: self.signals.progress.emit(generation, partial),
+                            client=client,
+                            cancellation=cancellation,
+                        )
+                    if (
+                        not preview
+                        and config.backend == "llama"
+                        and active_llm_provider(config).stream
+                    ):
+                        return recover_interrupted_stream(
+                            attempt, cancellation,
+                            lambda: self.signals.restarted.emit(generation),
+                        )
+                    return attempt()
+            finally:
+                # Request settings are snapshots, but automatically renewed keys
+                # must survive them. Never overwrite a key edited meanwhile.
+                if (
+                    config.backend == "google2"
+                    and config.google2_api_key != original_google2_key
+                    and key_config.google2_api_key == original_google2_key
+                ):
+                    key_config.google2_api_key = config.google2_api_key
 
         future = executor.submit(request)
         with self._lock:
@@ -285,7 +213,13 @@ class Translator(QObject):
                 else:
                     self.signals.cancelled.emit(generation)
             except Exception as error:
-                self.signals.error.emit(generation, str(error))
+                self.signals.error.emit(
+                    generation,
+                    redact_sensitive_text(str(error), (
+                        *translation_secret_values(config), original_google2_key,
+                        os.environ.get("DEEPL_API_KEY", ""),
+                    )),
+                )
             else:
                 self.signals.result.emit(generation, result)
             if close_clients:
@@ -293,6 +227,20 @@ class Translator(QObject):
                 self._final_client.close()
 
         future.add_done_callback(done)
+        return generation
+
+    def deliver_cached(
+        self, text: str, *, on_registered: Callable[[int], None],
+    ) -> int:
+        """Use the same queued lifecycle as a worker, without another request."""
+        with self._lock:
+            if self._closing:
+                raise RuntimeError("翻译器正在关闭")
+            self._generation += 1
+            generation = self._generation
+        on_registered(generation)
+        self.signals.started.emit(generation)
+        self.signals.result.emit(generation, text)
         return generation
 
     def _make_room_for_final_translation(self) -> None:
@@ -433,6 +381,10 @@ class Translator(QObject):
         if cancellation is not None and cancellation.is_set():
             raise CancelledError()
         timeout = max(1.0, config.timeout_ms / 1000)
+        if cancellation is not None and cancellation.deadline is not None:
+            timeout = cancellation.remaining()
+            if client is not None:
+                client = DeadlineClient(client, cancellation)
         if config.backend == "google2":
             result = Translator._google2(text, config, timeout, client=client)
         elif config.backend == "deepl":
@@ -474,9 +426,14 @@ class Translator(QObject):
                 )
                 response.raise_for_status()
                 data = response.json()
-                result = data["choices"][0]["message"]["content"].strip()
+                choice = data["choices"][0]
+                if choice.get("finish_reason") not in (None, "stop"):
+                    raise RuntimeError("翻译未完整生成")
+                result = choice["message"]["content"].strip()
         if cancellation is not None and cancellation.is_set():
             raise CancelledError()
+        if not result.strip():
+            raise RuntimeError("翻译服务返回空译文")
         return result
 
     @staticmethod
@@ -493,7 +450,12 @@ class Translator(QObject):
         if cancellation is not None and cancellation.is_set():
             raise CancelledError()
         text = ""
+        completed = False
         started_at = time.monotonic()
+        updates = TimedStreamProgress(
+            lambda value: progress(value)
+            if cancellation is None or not cancellation.is_set() else None
+        )
         stream = client.stream if client is not None else httpx.stream
         try:
             with stream(
@@ -515,18 +477,30 @@ class Translator(QObject):
                         if not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
-                        if not data or data == "[DONE]":
+                        if data == "[DONE]":
+                            completed = True
+                            break
+                        if not data:
                             continue
                         event = json.loads(data)
-                        delta = event.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if not delta:
+                        choices = event.get("choices") or [{}]
+                        choice = choices[0]
+                        reason = choice.get("finish_reason")
+                        if reason is not None:
+                            if reason != "stop":
+                                raise RuntimeError("流式翻译未完整生成")
+                            completed = True
+                        delta = (choice.get("delta") or {}).get("content") or ""
+                        if not delta and not completed:
                             continue
                         if cancellation is not None and cancellation.is_set():
                             raise CancelledError()
                         if len(text) + len(delta) > MAX_STREAM_RESPONSE_CHARS:
                             raise RuntimeError("流式翻译响应过长")
                         text += delta
-                        progress(text.strip())
+                        updates.update(text.strip())
+                        if completed:
+                            break
                 finally:
                     if cancellation is not None:
                         cancellation.detach(response)
@@ -534,8 +508,12 @@ class Translator(QObject):
             if cancellation is not None and cancellation.is_set():
                 raise CancelledError() from error
             raise
+        finally:
+            updates.close()
         if cancellation is not None and cancellation.is_set():
             raise CancelledError()
+        if not completed:
+            raise IncompleteStreamError("流式翻译提前结束")
         return text.strip()
 
     @staticmethod

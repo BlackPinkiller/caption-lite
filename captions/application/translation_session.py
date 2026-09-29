@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 import threading
 import time
 
 import httpx
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Qt, Signal, Slot
 
-from captions.config import SegmentationConfig, TranslationConfig
+from captions.core.settings import SegmentationConfig, TranslationConfig
 from captions.core.diagnostics import Diagnostics, NULL_DIAGNOSTICS
-from captions.translation import HistoryRecord, Translator
+from captions.core.preview_translation import CompletedPreview, PreviewInput
+from captions.core.privacy import redact_sensitive_text
+from captions.core.translation_alignment import source_extends_preview
+from captions.core.translation import HistoryRecord
+from captions.adapters.translation import Translator
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,7 @@ class TranslationJob:
 
 class TranslationSession(QObject):
     started = Signal(int, object)
+    restarted = Signal(int, object)
     progress = Signal(int, object, str)
     result = Signal(int, object, str)
     error = Signal(int, object, str)
@@ -61,15 +67,26 @@ class TranslationSession(QObject):
         self.pending_preview_text = ""
         self.pending_history: list[HistoryRecord] = []
         self.pending_config: TranslationConfig | None = None
+        self._pending_key_config: TranslationConfig | None = None
         self.pending_segmentation: SegmentationConfig | None = None
         self.pending_cue_id = 0
         self.last_preview_text = ""
         self.last_preview_sent_at = 0.0
-        self.translator.signals.started.connect(self._started)
-        self.translator.signals.progress.connect(self._progress)
-        self.translator.signals.result.connect(self._result)
-        self.translator.signals.error.connect(self._error)
-        self.translator.signals.cancelled.connect(self._cancelled)
+        self._preview_generation: int | None = None
+        self._preview_inputs: dict[int, PreviewInput] = {}
+        self._latest_preview_input: PreviewInput | None = None
+        self._last_preview_input: PreviewInput | None = None
+        self._completed_preview: CompletedPreview | None = None
+        # A Future completed before add_done_callback runs invokes it on the
+        # submitting thread. Queue every event so its result cannot overtake
+        # the started/progress signals already queued by the worker.
+        queued = Qt.ConnectionType.QueuedConnection
+        self.translator.signals.started.connect(self._started, queued)
+        self.translator.signals.restarted.connect(self._restarted, queued)
+        self.translator.signals.progress.connect(self._progress, queued)
+        self.translator.signals.result.connect(self._result, queued)
+        self.translator.signals.error.connect(self._error, queued)
+        self.translator.signals.cancelled.connect(self._cancelled, queued)
 
     def request_commit(
         self,
@@ -82,10 +99,21 @@ class TranslationSession(QObject):
     ) -> int:
         if self._closing:
             return 0
+        request = self._preview_input(cue_id, source, history, config)
+        completed = self._completed_preview
         self._reset_preview_schedule()
         self._discard_preview_jobs()
         self.translator.cancel_pending()
         job = TranslationJob("commit", record_id, source, cue_id)
+        if completed is not None and completed.request == request:
+            generation = self.translator.deliver_cached(
+                completed.translation,
+                on_registered=lambda value: self._register_job(
+                    value, job, backend=config.backend,
+                ),
+            )
+            self.diagnostics.event("translation.reused", generation=generation, cue_id=cue_id)
+            return generation
         generation = self.translator.translate(
             source,
             history,
@@ -125,11 +153,37 @@ class TranslationSession(QObject):
         if self._closing:
             return
         source = source.strip()
+        request = self._preview_input(cue_id, source, history, config)
+        previous = self._latest_preview_input
+        if previous is not None and not previous.can_extend_to(request):
+            self.translator.cancel_pending()
+            self._discard_preview_jobs()
+            self._completed_preview = None
+            if previous.cue_id != cue_id:
+                self._reset_preview_schedule()
+        self._latest_preview_input = request
         self.pending_preview_text = source
-        self.pending_history = history
-        self.pending_config = config
+        context_count = max(0, config.context_segments)
+        self.pending_history = deepcopy(history[-context_count:]) if context_count else []
+        self.pending_config = deepcopy(config)
+        self._pending_key_config = config
         self.pending_segmentation = segmentation
         self.pending_cue_id = cue_id
+        self._schedule_pending_preview()
+
+    @staticmethod
+    def _preview_input(cue_id, source, history, config) -> PreviewInput:
+        count = max(0, config.context_segments)
+        context = tuple(record.source for record in history[-count:]) if count else ()
+        return PreviewInput.create(cue_id, source, context, asdict(config))
+
+    def _schedule_pending_preview(self) -> None:
+        source = self.pending_preview_text
+        segmentation = self.pending_segmentation
+        if self._closing or segmentation is None or self._preview_generation is not None:
+            return
+        if self._latest_preview_input == self._last_preview_input:
+            return
         if len(source) < segmentation.preview_min_chars:
             return
         if not self.last_preview_text:
@@ -150,6 +204,12 @@ class TranslationSession(QObject):
 
     def has_job(self, generation: int) -> bool:
         return generation in self.jobs
+
+    def invalidate_previews(self) -> None:
+        """Retire current previews while preserving committed history work."""
+        self._reset_preview_schedule()
+        self._discard_preview_jobs()
+        self.translator.cancel_pending()
 
     def cancel_all(self) -> None:
         self._reset_preview_schedule()
@@ -176,7 +236,7 @@ class TranslationSession(QObject):
             try:
                 key = completed.result()
             except Exception as error:
-                self.google2_key_error.emit(str(error))
+                self.google2_key_error.emit(redact_sensitive_text(str(error)))
             else:
                 self.google2_key_ready.emit(key)
 
@@ -238,19 +298,22 @@ class TranslationSession(QObject):
             config is None
             or segmentation is None
             or len(source) < segmentation.preview_min_chars
+            or self._preview_generation is not None
         ):
             return
-        if source == self.last_preview_text:
+        if self._latest_preview_input == self._last_preview_input:
             return
         self.preview_timer.stop()
         self.last_preview_text = source
         self.last_preview_sent_at = time.monotonic()
+        self._last_preview_input = self._latest_preview_input
         job = TranslationJob("preview", None, source, self.pending_cue_id)
         generation = self.translator.translate(
             source,
             self.pending_history,
             config,
             preview=True,
+            google2_key_config=self._pending_key_config,
             on_registered=lambda value: self._register_job(
                 value,
                 job,
@@ -266,6 +329,10 @@ class TranslationSession(QObject):
         backend: str,
     ) -> None:
         self.jobs[generation] = job
+        if job.kind == "preview":
+            self._preview_generation = generation
+            if self._latest_preview_input is not None:
+                self._preview_inputs[generation] = self._latest_preview_input
         self.diagnostics.event(
             "translation.submitted",
             generation=generation,
@@ -281,10 +348,16 @@ class TranslationSession(QObject):
         self.pending_preview_text = ""
         self.pending_history = []
         self.pending_config = None
+        self._pending_key_config = None
         self.pending_segmentation = None
         self.pending_cue_id = 0
         self.last_preview_text = ""
         self.last_preview_sent_at = 0.0
+        self._latest_preview_input = None
+        self._last_preview_input = None
+        self._completed_preview = None
+        self._preview_generation = None
+        self._preview_inputs.clear()
 
     def _discard_preview_jobs(self) -> None:
         preview_generations = {
@@ -298,7 +371,15 @@ class TranslationSession(QObject):
             if job.kind != "preview"
         }
         self._progress_logged.difference_update(preview_generations)
+        self._preview_inputs.clear()
+        self._preview_generation = None
         self.previews_discarded.emit()
+
+    def _finish_preview(self, generation: int) -> None:
+        self._preview_inputs.pop(generation, None)
+        if generation == self._preview_generation:
+            self._preview_generation = None
+            self._schedule_pending_preview()
 
     @Slot(int)
     def _started(self, generation: int) -> None:
@@ -311,12 +392,29 @@ class TranslationSession(QObject):
                 cue_id=job.cue_id,
                 record_id=job.index,
             )
-            self.started.emit(generation, job)
+            if self._matches_current_source(job):
+                self.started.emit(generation, job)
+
+    def _matches_current_source(self, job: TranslationJob) -> bool:
+        return job.kind != "preview" or (
+            job.cue_id == self.pending_cue_id
+            and source_extends_preview(job.source, self.pending_preview_text)
+        )
+
+    @Slot(int)
+    def _restarted(self, generation: int) -> None:
+        job = self.jobs.get(generation)
+        if job is not None and self._matches_current_source(job):
+            self.diagnostics.event(
+                "translation.restarted", generation=generation, kind=job.kind,
+                cue_id=job.cue_id, record_id=job.index,
+            )
+            self.restarted.emit(generation, job)
 
     @Slot(int, str)
     def _progress(self, generation: int, text: str) -> None:
         job = self.jobs.get(generation)
-        if job is not None:
+        if job is not None and self._matches_current_source(job):
             if generation not in self._progress_logged:
                 self._progress_logged.add(generation)
                 self.diagnostics.event(
@@ -332,6 +430,7 @@ class TranslationSession(QObject):
     @Slot(int, str)
     def _result(self, generation: int, text: str) -> None:
         job = self.jobs.pop(generation, None)
+        request = self._preview_inputs.get(generation)
         self._progress_logged.discard(generation)
         if job is not None:
             self.diagnostics.event(
@@ -342,7 +441,11 @@ class TranslationSession(QObject):
                 record_id=job.index,
                 translation=text,
             )
-            self.result.emit(generation, job, text)
+            if self._matches_current_source(job):
+                if request is not None and text.strip():
+                    self._completed_preview = CompletedPreview(request, text)
+                self.result.emit(generation, job, text)
+        self._finish_preview(generation)
 
     @Slot(int, str)
     def _error(self, generation: int, message: str) -> None:
@@ -358,6 +461,7 @@ class TranslationSession(QObject):
                 error=message,
             )
             self.error.emit(generation, job, message)
+        self._finish_preview(generation)
 
     @Slot(int)
     def _cancelled(self, generation: int) -> None:
@@ -372,3 +476,4 @@ class TranslationSession(QObject):
                 record_id=job.index,
             )
             self.cancelled.emit(generation, job)
+        self._finish_preview(generation)

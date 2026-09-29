@@ -9,9 +9,11 @@ import threading
 import urllib.request
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from captions.config import MODEL_NAME, MODEL_URL
+from captions.platforms.windows.high_precision_runtime import HighPrecisionInstallWorker
+
+from captions.core.model_catalog import MODEL_NAME, MODEL_URL
 
 
 class DownloadCancelled(Exception):
@@ -157,3 +159,82 @@ class ModelDownloadWorker(QObject):
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
             self.stopped.emit()
+
+
+class ModelDownloadSession(QObject):
+    progress = Signal(object, object)
+    status = Signal(str)
+    completed = Signal()
+    cancelled = Signal()
+    error = Signal(str)
+    finished = Signal()
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.thread: QThread | None = None
+        self.worker: ModelDownloadWorker | HighPrecisionInstallWorker | None = None
+
+    @property
+    def running(self) -> bool:
+        return self.thread is not None
+
+    def start(
+        self,
+        destination: Path,
+        *,
+        model_name: str,
+        model_url: str,
+        expected_size: int,
+        expected_sha256: str,
+        required_files: tuple[str, ...],
+    ) -> bool:
+        if self.running:
+            return False
+        worker = ModelDownloadWorker(
+            destination,
+            model_name=model_name,
+            model_url=model_url,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            required_files=required_files,
+        )
+        return self._start_worker(worker)
+
+    def start_high_precision(self, destination: Path) -> bool:
+        if self.running:
+            return False
+        return self._start_worker(HighPrecisionInstallWorker(destination))
+
+    def _start_worker(
+        self,
+        worker: ModelDownloadWorker | HighPrecisionInstallWorker,
+    ) -> bool:
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.progress.emit)
+        worker.status.connect(self.status.emit)
+        worker.completed.connect(self.completed.emit)
+        worker.cancelled.connect(self.cancelled.emit)
+        worker.error.connect(self.error.emit)
+        worker.stopped.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self.thread = thread
+        self.worker = worker
+        thread.start()
+        return True
+
+    def cancel(self) -> None:
+        if self.worker is not None:
+            self.worker.cancel()
+
+    def _thread_finished(self) -> None:
+        thread = self.thread
+        if self.sender() is not thread:
+            return
+        thread.wait()
+        self.thread = None
+        self.worker = None
+        self.finished.emit()

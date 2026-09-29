@@ -17,8 +17,8 @@ PySide6_Addons==6.11.1
 PySide6_Essentials==6.11.1
 pywin32-ctypes==0.2.3
 setuptools==83.0.0
-sherpa-onnx==1.13.4
-sherpa-onnx-core==1.13.4
+sherpa-onnx==1.13.8
+sherpa-onnx-core==1.13.8
 shiboken6==6.11.1
 SoundCard==0.4.6
 typing_extensions==4.16.0
