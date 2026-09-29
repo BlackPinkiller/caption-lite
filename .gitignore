@@ -1,8 +1,8 @@
 # Local environments and build output
-/build/
-/build-*/
-/.venv/
-/dist/
+/desktop/build/
+/desktop/build-*/
+/desktop/.venv/
+/desktop/dist/
 /.vs/
 /.vscode/
 /.opencode/
@@ -20,14 +20,14 @@ htmlcov/
 
 # Local development material, excluded from the published project
 /AGENTS.md
-/tests/
+/desktop/tests/
 /android/app/src/test/
 /android/app/src/androidTest/
 /docs/validation/
 /docs/development.md
 /docs/usage.md
-/tools/benchmark_*.py
-/tools/smoke_asr.py
+/desktop/tools/benchmark_*.py
+/desktop/tools/smoke_asr.py
 
 # User data and downloaded models
 runtime/

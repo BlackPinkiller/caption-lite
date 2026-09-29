@@ -13,6 +13,7 @@ from PyInstaller.archive.readers import CArchiveReader
 GOOGLE_KEY = re.compile(rb"AIza[0-9A-Za-z_-]{35}")
 RELEASE_FILES = ("RealtimeSubtitle.exe", "config.example.json")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PROJECT_ROOT.parent
 RELEASE_NOTICES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "resources/LICENSE.silero-vad")
 
 
@@ -59,7 +60,8 @@ def package_release(dist: Path) -> Path:
         for name in RELEASE_FILES:
             output.write(dist / name, arcname=name)
         for name in RELEASE_NOTICES:
-            output.write(PROJECT_ROOT / name, arcname=name)
+            source_root = PROJECT_ROOT if name.startswith("resources/") else REPOSITORY_ROOT
+            output.write(source_root / name, arcname=name)
     temporary.replace(package)
     return package
 

@@ -1,0 +1,43 @@
+name: Android build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android toolchain
+        run: ./tools/setup-wsl.sh
+      - name: Build APK
+        run: ./gradlew --no-daemon assembleDebug

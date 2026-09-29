@@ -90,12 +90,15 @@
 
 <h2 align="center">从源码构建</h2>
 
+桌面端位于 `desktop/`，Android 位于 `android/`，两端独立构建。[开发约定](CONTRIBUTING.md)
+
 <details>
 <summary><strong>Windows · Python 3.12（64 位）</strong></summary>
 
 在仓库根目录打开 PowerShell：
 
 ```powershell
+cd desktop
 .\tools\setup.ps1
 .\tools\run.ps1
 ```
@@ -106,7 +109,7 @@
 .\tools\build.ps1
 ```
 
-产物为 `dist/RealtimeSubtitle-portable.zip`。安装与打包使用 `requirements-lock.txt` 固定依赖版本。
+产物为 `desktop/dist/RealtimeSubtitle-portable.zip`。安装与打包使用桌面目录内的 `requirements-lock.txt` 固定依赖版本。
 
 </details>
 
